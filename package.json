@@ -1,0 +1,29 @@
+{
+  "name": "facturacion-8millas-api",
+  "version": "1.0.0",
+  "description": "Sistema de facturación electrónica 8 Millas — API REST con SUNAT via Nubefact",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "db:migrate": "node src/db/migrate.js",
+    "db:seed": "node src/db/seed.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.11.5",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.2",
+    "morgan": "^1.10.0",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.3.1",
+    "express-validator": "^7.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
