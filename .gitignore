@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.local
+*.p12
+*.pem
+*.key
+dist/
+logs/
+*.log
