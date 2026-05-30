@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { authJWT, authApiKey, auth, soloAdmin } from '../middleware/auth.js'
 import rateLimit from 'express-rate-limit'
+import { getDb } from '../lib/firebase.js'
 
 // Controllers
 import * as authCtrl from '../controllers/auth.js'
@@ -49,31 +50,41 @@ router.post('/clientes',            authJWT, cliCtrl.crear)
 router.put ('/clientes/:id',        authJWT, cliCtrl.actualizar)
 
 // ── VISTA360 — Facturas por panel/cliente ─────────────────────────
+// Migrado de SQL Postgres a Firebase: ANTES llamaba a query() (que ya no
+// existe) y devolvía 500 garantizado.
 router.get('/vista360/facturas', authApiKey, async (req, res) => {
   try {
     const { panel_firebase_id, cliente_firebase_id, estado, limit = 20 } = req.query
-    const conditions = ['f.deleted = false']
-    const params = []
-    let i = 1
+    const db = getDb()
 
-    if (panel_firebase_id) { conditions.push(`p.firebase_id = $${i++}`); params.push(panel_firebase_id) }
-    if (cliente_firebase_id) { conditions.push(`c.firebase_id = $${i++}`); params.push(cliente_firebase_id) }
-    if (estado) { conditions.push(`f.estado = $${i++}`); params.push(estado) }
+    let q = db.collection('facturas').where('deleted', '==', false)
+    if (estado) q = q.where('estado', '==', estado)
+    if (panel_firebase_id)    q = q.where('panel_id', '==', panel_firebase_id)
+    if (cliente_firebase_id)  q = q.where('cliente_id', '==', cliente_firebase_id)
 
-    const { rows } = await query(
-      `SELECT f.id, f.numero_fmt, f.tipo_doc, f.estado, f.sunat_estado,
-              f.total, f.moneda, f.fecha_emision, f.fecha_vencimiento,
-              f.pdf_url, f.xml_url, f.cdr_url, f.hash,
-              f.pagado, f.fecha_pago,
-              f.cliente_nombre, f.panel_nombre
-       FROM facturas f
-       LEFT JOIN paneles p  ON p.id = f.panel_id
-       LEFT JOIN clientes c ON c.id = f.cliente_id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY f.fecha_emision DESC
-       LIMIT $${i}`,
-      [...params, parseInt(limit)]
-    )
+    const snap = await q.orderBy('fecha_emision', 'desc').limit(parseInt(limit)).get()
+    const rows = snap.docs.map(d => {
+      const f = d.data()
+      return {
+        id:                d.id,
+        numero_fmt:        f.numero_fmt,
+        tipo_doc:          f.tipo_doc,
+        estado:            f.estado,
+        sunat_estado:      f.sunat_estado || null,
+        total:             f.total,
+        moneda:            f.moneda,
+        fecha_emision:     f.fecha_emision,
+        fecha_vencimiento: f.fecha_vencimiento || null,
+        pdf_url:           f.pdf_url || null,
+        xml_url:           f.xml_url || null,
+        cdr_url:           f.cdr_url || null,
+        hash:              f.hash    || null,
+        pagado:            f.pagado  || false,
+        fecha_pago:        f.fecha_pago || null,
+        cliente_nombre:    f.cliente_nombre,
+        panel_nombre:      f.panel_nombre || null,
+      }
+    })
     res.json({ ok: true, data: rows })
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
@@ -81,40 +92,72 @@ router.get('/vista360/facturas', authApiKey, async (req, res) => {
 })
 
 // ── REPORTES ──────────────────────────────────────────────────────
+// Migrado de SQL Postgres a Firebase: agrupamos en memoria (Firestore no
+// tiene GROUP BY). Para volúmenes >5000 facturas/año habría que paginar
+// o mantener un documento de resumen actualizado por trigger.
 router.get('/reportes/resumen', auth, async (req, res) => {
   try {
-    const { anio = new Date().getFullYear() } = req.query
+    const anio = parseInt(req.query.anio || new Date().getFullYear())
+    const db   = getDb()
 
-    const { rows: mensual } = await query(
-      `SELECT
-        to_char(fecha_emision, 'YYYY-MM') AS mes,
-        to_char(fecha_emision, 'Mon')     AS mes_label,
-        COUNT(*) AS comprobantes,
-        SUM(total) AS facturado,
-        SUM(total) FILTER (WHERE estado IN ('Cobrada','Pagada')) AS cobrado,
-        SUM(total) FILTER (WHERE estado IN ('Emitida','Aceptada','Pendiente')) AS pendiente,
-        SUM(total) FILTER (WHERE estado = 'Vencida') AS vencido
-       FROM facturas
-       WHERE deleted = false
-         AND EXTRACT(YEAR FROM fecha_emision) = $1
-         AND estado NOT IN ('Anulada','Rechazada')
-       GROUP BY 1, 2
-       ORDER BY 1`,
-      [parseInt(anio)]
-    )
+    const snap = await db.collection('facturas')
+      .where('deleted', '==', false)
+      .where('fecha_emision', '>=', `${anio}-01-01`)
+      .where('fecha_emision', '<=', `${anio}-12-31`)
+      .get()
 
-    const { rows: topClientes } = await query(
-      `SELECT
-        cliente_nombre, cliente_doc,
-        COUNT(*) AS comprobantes,
-        SUM(total) AS total_facturado,
-        SUM(total) FILTER (WHERE estado IN ('Cobrada','Pagada')) AS total_cobrado
-       FROM facturas
-       WHERE deleted = false AND estado NOT IN ('Anulada','Rechazada')
-       GROUP BY cliente_nombre, cliente_doc
-       ORDER BY total_facturado DESC
-       LIMIT 10`
-    )
+    const MESES_ES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+    const facturas = snap.docs.map(d => d.data())
+
+    // Resumen mensual
+    const porMes = new Map()
+    for (const f of facturas) {
+      if (['Anulada','Rechazada'].includes(f.estado)) continue
+      const mes = (f.fecha_emision || '').slice(0, 7)  // YYYY-MM
+      if (!mes) continue
+      if (!porMes.has(mes)) {
+        const mesNum = parseInt(mes.slice(5, 7))
+        porMes.set(mes, {
+          mes,
+          mes_label:     MESES_ES[mesNum - 1] || mes,
+          comprobantes:  0,
+          facturado:     0,
+          cobrado:       0,
+          pendiente:     0,
+          vencido:       0,
+        })
+      }
+      const r = porMes.get(mes)
+      r.comprobantes += 1
+      r.facturado    += Number(f.total || 0)
+      if (['Cobrada','Pagada'].includes(f.estado))                  r.cobrado   += Number(f.total || 0)
+      if (['Emitida','Aceptada','Pendiente'].includes(f.estado))    r.pendiente += Number(f.total || 0)
+      if (f.estado === 'Vencida')                                   r.vencido   += Number(f.total || 0)
+    }
+    const mensual = [...porMes.values()].sort((a, b) => a.mes.localeCompare(b.mes))
+
+    // Top clientes
+    const porCli = new Map()
+    for (const f of facturas) {
+      if (['Anulada','Rechazada'].includes(f.estado)) continue
+      const k = `${f.cliente_doc}|${f.cliente_nombre}`
+      if (!porCli.has(k)) {
+        porCli.set(k, {
+          cliente_nombre: f.cliente_nombre,
+          cliente_doc:    f.cliente_doc,
+          comprobantes:   0,
+          total_facturado: 0,
+          total_cobrado:   0,
+        })
+      }
+      const r = porCli.get(k)
+      r.comprobantes    += 1
+      r.total_facturado += Number(f.total || 0)
+      if (['Cobrada','Pagada'].includes(f.estado)) r.total_cobrado += Number(f.total || 0)
+    }
+    const topClientes = [...porCli.values()]
+      .sort((a, b) => b.total_facturado - a.total_facturado)
+      .slice(0, 10)
 
     res.json({ ok: true, data: { mensual, topClientes } })
   } catch (err) {

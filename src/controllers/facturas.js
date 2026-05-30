@@ -123,16 +123,73 @@ export const crear = async (req, res) => {
 export const emitir = async (req, res) => {
   try {
     const db  = getDb();
-    const doc = await db.collection(COL).doc(req.params.id).get();
+    const docRef = db.collection(COL).doc(req.params.id);
+    const doc = await docRef.get();
     if (!doc.exists) return res.status(404).json({ ok: false, error: "Factura no encontrada" });
 
     const factura = { id: doc.id, ...doc.data() };
-    if (factura.estado !== "Borrador")
-      return res.status(400).json({ ok: false, error: `No se puede emitir en estado "${factura.estado}"` });
 
-    const result = await enviarASunat(req.params.id, factura, factura.items || []);
+    // Idempotencia: si ya fue emitida o aceptada, devolvemos los datos
+    // existentes en vez de lanzar 400 (que se interpretaba como "borrar
+    // la factura" en algunos clientes y causaba que pareciera desaparecer).
+    if (["Emitida", "Aceptada", "Cobrada"].includes(factura.estado)) {
+      return res.json({
+        ok: true,
+        mensaje: `La factura ya está en estado "${factura.estado}"`,
+        idempotente: true,
+        data: {
+          id:           factura.id,
+          estado:       factura.estado,
+          sunat_estado: factura.sunat_estado || null,
+          cdr_url:      factura.cdr_url      || null,
+          hash:         factura.hash         || null,
+          numero_fmt:   factura.numero_fmt   || null,
+        },
+      });
+    }
 
-    res.json({ ok: true, mensaje: result.mensaje, data: { estado: "Emitida", cdr_url: result.cdrUrl } });
+    // Solo bloqueamos estados que realmente no deben re-emitirse
+    if (["Anulada", "Rechazada"].includes(factura.estado)) {
+      return res.status(400).json({
+        ok: false,
+        error: `No se puede emitir una factura en estado "${factura.estado}". ` +
+               `Crea una nueva factura.`,
+      });
+    }
+
+    // Lock optimista: marcamos como "Emitiendo" para que dos clicks
+    // concurrentes no envíen dos veces a SUNAT.
+    if (factura.estado === "Emitiendo") {
+      return res.status(409).json({
+        ok: false,
+        error: "Esta factura ya está siendo emitida. Espera unos segundos y refresca la lista.",
+      });
+    }
+    await docRef.update({
+      estado: "Emitiendo",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await enviarASunat(req.params.id, factura, factura.items || []);
+      res.json({
+        ok:      true,
+        mensaje: result.mensaje,
+        data: {
+          id:      factura.id,
+          estado:  "Emitida",
+          cdr_url: result.cdrUrl,
+        },
+      });
+    } catch (sunatErr) {
+      // Revertir el lock para que el usuario pueda reintentar
+      await docRef.update({
+        estado: "Borrador",
+        sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      throw sunatErr;
+    }
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
