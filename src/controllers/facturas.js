@@ -50,7 +50,9 @@ export const crear = async (req, res) => {
       tipo_doc = "01", serie,
       cliente_tipo_doc, cliente_doc, cliente_nombre,
       cliente_email, cliente_direccion,
-      panel_nombre, periodo_inicio, periodo_fin, concepto,
+      panel_id, panel_nombre, periodo_inicio, periodo_fin, concepto,
+      cliente_id,
+      cara_panel,
       moneda = "PEN", es_exonerado = false,
       fecha_emision, fecha_vencimiento,
       items = [],
@@ -98,7 +100,10 @@ export const crear = async (req, res) => {
       cliente_doc, cliente_nombre,
       cliente_email: cliente_email || null,
       cliente_direccion: cliente_direccion || null,
+      panel_id: panel_id || null,
       panel_nombre: panel_nombre || null,
+      cliente_id: cliente_id || null,
+      cara_panel: cara_panel || null,
       periodo_inicio: periodo_inicio || null,
       periodo_fin: periodo_fin || null,
       concepto: concepto || null,
@@ -112,6 +117,34 @@ export const crear = async (req, res) => {
     };
 
     const ref = await db.collection(COL).add(factura);
+
+    // ── Auto-crear contrato en Firestore si la factura tiene período ────
+    // Cuando se especifica periodo_inicio y periodo_fin + panel_id,
+    // Vista360 necesita un doc en "contratos" para mostrar el panel ocupado.
+    if (periodo_inicio && periodo_fin && panel_id) {
+      try {
+        await db.collection("contratos").add({
+          panel_id,
+          cliente_id:      cliente_id || null,
+          cara:            cara_panel || null,   // 'A' | 'B' | null
+          inicio:          periodo_inicio,
+          fin:             periodo_fin,
+          monto:           totalFinal,
+          pagado:          false,
+          pagosMeses:      {},
+          factura_id:      ref.id,
+          factura_numero:  numero_fmt,
+          deleted:         false,
+          origen:          "facturacion_api",
+          createdAt:       FieldValue.serverTimestamp(),
+        });
+        console.log(`✅ Contrato creado en Firestore para factura ${numero_fmt}`);
+      } catch (cErr) {
+        // No fallamos la factura si el contrato falla — solo log
+        console.error("⚠️ Error al crear contrato en Firestore:", cErr.message);
+      }
+    }
+
     res.status(201).json({ ok: true, data: { id: ref.id, ...factura }, mensaje: "Factura creada como Borrador" });
   } catch (err) {
     console.error(err);
@@ -227,3 +260,4 @@ export const anular = async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 };
+
