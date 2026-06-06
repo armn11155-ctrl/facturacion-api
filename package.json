@@ -1,6 +1,6 @@
 {
   "name": "facturacion-8millas-api",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Backend API de facturación electrónica 8 Millas — Node.js + Firebase + SUNAT directo",
   "main": "src/index.js",
   "type": "module",
@@ -22,7 +22,9 @@
     "express-validator": "^7.1.0",
     "xml-crypto": "^6.0.0",
     "node-forge": "^1.3.1",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "puppeteer": "^22.0.0",
+    "qrcode": "^1.5.3"
   },
   "engines": {
     "node": "20.x"
