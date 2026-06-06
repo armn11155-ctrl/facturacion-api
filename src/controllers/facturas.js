@@ -1,5 +1,6 @@
 import { getDb } from "../lib/firebase.js";
 import { enviarASunat } from "../services/sunat.js";
+import { generarPdfFactura } from "../services/pdf.js";
 import { FieldValue } from "firebase-admin/firestore";
 
 const COL = "facturas";
@@ -122,14 +123,12 @@ export const crear = async (req, res) => {
     const ref = await db.collection(COL).add(factura);
 
     // ── Auto-crear contrato en Firestore si la factura tiene período ────
-    // Cuando se especifica periodo_inicio y periodo_fin + panel_id,
-    // Vista360 necesita un doc en "contratos" para mostrar el panel ocupado.
     if (periodo_inicio && periodo_fin && panel_id) {
       try {
         await db.collection("contratos").add({
           panel_id,
           cliente_id:      cliente_id || null,
-          cara:            cara_panel || null,   // 'A' | 'B' | null
+          cara:            cara_panel || null,
           inicio:          periodo_inicio,
           fin:             periodo_fin,
           monto:           totalFinal,
@@ -143,7 +142,6 @@ export const crear = async (req, res) => {
         });
         console.log(`✅ Contrato creado en Firestore para factura ${numero_fmt}`);
       } catch (cErr) {
-        // No fallamos la factura si el contrato falla — solo log
         console.error("⚠️ Error al crear contrato en Firestore:", cErr.message);
       }
     }
@@ -165,9 +163,6 @@ export const emitir = async (req, res) => {
 
     const factura = { id: doc.id, ...doc.data() };
 
-    // Idempotencia: si ya fue emitida o aceptada, devolvemos los datos
-    // existentes en vez de lanzar 400 (que se interpretaba como "borrar
-    // la factura" en algunos clientes y causaba que pareciera desaparecer).
     if (["Emitida", "Aceptada", "Cobrada"].includes(factura.estado)) {
       return res.json({
         ok: true,
@@ -184,17 +179,13 @@ export const emitir = async (req, res) => {
       });
     }
 
-    // Solo bloqueamos estados que realmente no deben re-emitirse
     if (["Anulada", "Rechazada"].includes(factura.estado)) {
       return res.status(400).json({
         ok: false,
-        error: `No se puede emitir una factura en estado "${factura.estado}". ` +
-               `Crea una nueva factura.`,
+        error: `No se puede emitir una factura en estado "${factura.estado}". Crea una nueva factura.`,
       });
     }
 
-    // Lock optimista: marcamos como "Emitiendo" para que dos clicks
-    // concurrentes no envíen dos veces a SUNAT.
     if (factura.estado === "Emitiendo") {
       return res.status(409).json({
         ok: false,
@@ -218,7 +209,6 @@ export const emitir = async (req, res) => {
         },
       });
     } catch (sunatErr) {
-      // Revertir el lock para que el usuario pueda reintentar
       await docRef.update({
         estado: "Borrador",
         sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT",
@@ -264,4 +254,32 @@ export const anular = async (req, res) => {
   }
 };
 
+// ── GET /api/facturas/:id/pdf ─────────────────────────────────────
+export const descargarPdf = async (req, res) => {
+  try {
+    const db  = getDb();
+    const doc = await db.collection(COL).doc(req.params.id).get();
 
+    if (!doc.exists) {
+      return res.status(404).json({ ok: false, error: "Factura no encontrada" });
+    }
+
+    const factura = { id: doc.id, ...doc.data() };
+
+    const { pdfBuffer, qrCadena } = await generarPdfFactura(factura);
+
+    const nombre = `${factura.numero_fmt || factura.serie + "-" + String(factura.numero).padStart(8,"0")}.pdf`;
+
+    res.set({
+      "Content-Type":        "application/pdf",
+      "Content-Disposition": `inline; filename="${nombre}"`,
+      "Content-Length":      pdfBuffer.length,
+      "X-QR-Cadena":         qrCadena,
+    });
+
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error("Error generando PDF:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+};
