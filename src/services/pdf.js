@@ -1,21 +1,22 @@
 // ══════════════════════════════════════════════════════════════════
-// SERVICIO PDF — Genera factura electrónica con QR (SUNAT)
-// Stack: puppeteer + qrcode
+// SERVICIO PDF — Render-compatible
+// Stack: puppeteer-core + @sparticuz/chromium + qrcode
 // ══════════════════════════════════════════════════════════════════
 
-import puppeteer from 'puppeteer'
+import chromium  from '@sparticuz/chromium'
+import puppeteer from 'puppeteer-core'
 import QRCode    from 'qrcode'
 import { buildHtmlFactura } from '../templates/factura.html.js'
 
-// ── Construye la cadena QR exigida por SUNAT ──────────────────────
+// ── Cadena QR exigida por SUNAT ───────────────────────────────────
 // Formato: RUC|TIPO|SERIE|NUMERO|IGV|TOTAL|FECHA|TIPO_DOC_CLI|NRO_DOC_CLI
 // Ref: R.S. 097-2012/SUNAT Anexo 2
 function buildCadenaQR(factura) {
-  const tipoDocCliente = factura.cliente_tipo_doc === 'DNI'  ? '1'
-                       : factura.cliente_tipo_doc === 'RUC'  ? '6'
-                       : factura.cliente_tipo_doc === 'CE'   ? '4'
-                       : factura.cliente_tipo_doc === 'PAS'  ? '7'
-                       : '6' // fallback RUC
+  const tipoDocCliente =
+    factura.cliente_tipo_doc === 'DNI' ? '1' :
+    factura.cliente_tipo_doc === 'RUC' ? '6' :
+    factura.cliente_tipo_doc === 'CE'  ? '4' :
+    factura.cliente_tipo_doc === 'PAS' ? '7' : '6'
 
   return [
     factura.emisor_ruc,
@@ -30,7 +31,6 @@ function buildCadenaQR(factura) {
   ].join('|')
 }
 
-// ── Genera el Data URL del QR (PNG base64 para incrustar en HTML) ─
 async function generarQRDataUrl(factura) {
   const cadena = buildCadenaQR(factura)
   const dataUrl = await QRCode.toDataURL(cadena, {
@@ -42,46 +42,35 @@ async function generarQRDataUrl(factura) {
   return { dataUrl, cadena }
 }
 
-// ── Instancia compartida de puppeteer (singleton) ─────────────────
-let _browser = null
-
-async function getBrowser() {
-  if (!_browser || !_browser.connected) {
-    _browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--font-render-hinting=none',
-      ],
-    })
-    // Cerrar limpiamente al apagar el proceso
-    process.on('exit', () => _browser?.close())
-  }
-  return _browser
-}
-
 // ── Función principal: Factura → Buffer PDF ───────────────────────
 export async function generarPdfFactura(factura) {
   const { dataUrl: qrDataUrl, cadena: qrCadena } = await generarQRDataUrl(factura)
   const html = buildHtmlFactura(factura, qrDataUrl)
 
-  const browser = await getBrowser()
-  const page    = await browser.newPage()
+  // @sparticuz/chromium descarga Chromium automáticamente en Render
+  const executablePath = await chromium.executablePath()
+
+  const browser = await puppeteer.launch({
+    args:           chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless:       chromium.headless,
+  })
+
+  const page = await browser.newPage()
 
   try {
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30_000 })
 
     const pdfBuffer = await page.pdf({
-      format: 'A4',
+      format:          'A4',
       printBackground: true,
-      margin: { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' },
+      margin:          { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' },
     })
 
     return { pdfBuffer, qrCadena }
   } finally {
     await page.close()
+    await browser.close()
   }
 }
