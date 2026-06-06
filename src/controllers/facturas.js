@@ -109,6 +109,9 @@ export const crear = async (req, res) => {
       concepto: concepto || null,
       moneda, es_exonerado,
       subtotal: subtotalTotal, igv: totalIgv, total: totalFinal,
+      op_gravada:   es_exonerado ? 0 : subtotalTotal,
+      op_exonerada: es_exonerado ? subtotalTotal : 0,
+      op_inafecta:  0,
       items: itemsCalc,
       estado: "Borrador",
       deleted: false,
@@ -260,4 +263,5 @@ export const anular = async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 };
+
 
