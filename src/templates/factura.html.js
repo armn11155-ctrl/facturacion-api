@@ -83,13 +83,10 @@ export function buildHtmlFactura(f, qrDataUrl) {
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${tipoLabel} ${numeroFmt}</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
     body {
       font-family: 'Inter', -apple-system, sans-serif;
       font-size: 11px;
@@ -98,287 +95,101 @@ export function buildHtmlFactura(f, qrDataUrl) {
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
+    .page { width: 210mm; min-height: 297mm; padding: 12mm 14mm 10mm; position: relative; }
 
-    .page {
-      width: 210mm;
-      min-height: 297mm;
-      padding: 12mm 14mm 10mm;
-      position: relative;
-    }
-
-    /* ── HEADER ─────────────────────────────────────────────── */
     .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      padding-bottom: 14px;
-      border-bottom: 2px solid #e5e7eb;
-      margin-bottom: 16px;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      padding-bottom: 14px; border-bottom: 2px solid #e5e7eb; margin-bottom: 16px;
     }
+    .company-name { font-size: 22px; font-weight: 800; color: #111827; letter-spacing: -0.5px; line-height: 1; }
+    .company-name span { color: #f59e0b; }
+    .company-meta { margin-top: 6px; color: #6b7280; font-size: 9.5px; line-height: 1.7; }
+    .doc-box { border: 2px solid #1d4ed8; border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 180px; }
+    .doc-tipo { font-size: 9px; font-weight: 700; letter-spacing: .8px; color: #1d4ed8; text-transform: uppercase; }
+    .doc-ruc { font-size: 10px; font-weight: 600; color: #374151; margin: 4px 0 2px; }
+    .doc-numero { font-size: 18px; font-weight: 800; color: #111827; letter-spacing: -0.5px; }
 
-    .logo-area {
-      flex: 1;
-    }
+    .parties { display: flex; gap: 16px; margin-bottom: 16px; }
+    .party-block { flex: 1; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
+    .party-title { font-size: 8.5px; font-weight: 700; letter-spacing: .6px; color: #6b7280; text-transform: uppercase; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; }
+    .party-name { font-size: 12px; font-weight: 700; color: #111827; margin-bottom: 4px; }
+    .party-detail { font-size: 9.5px; color: #6b7280; line-height: 1.65; }
 
-    .company-name {
-      font-size: 22px;
-      font-weight: 800;
-      color: #111827;
-      letter-spacing: -0.5px;
-      line-height: 1;
-    }
-
-    .company-name span {
-      color: #f59e0b;
-    }
-
-    .company-meta {
-      margin-top: 6px;
-      color: #6b7280;
-      font-size: 9.5px;
-      line-height: 1.7;
-    }
-
-    .doc-box {
-      border: 2px solid #1d4ed8;
-      border-radius: 8px;
-      padding: 12px 18px;
-      text-align: center;
-      min-width: 180px;
-    }
-
-    .doc-tipo {
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: .8px;
-      color: #1d4ed8;
-      text-transform: uppercase;
-    }
-
-    .doc-ruc {
-      font-size: 10px;
-      font-weight: 600;
-      color: #374151;
-      margin: 4px 0 2px;
-    }
-
-    .doc-numero {
-      font-size: 18px;
-      font-weight: 800;
-      color: #111827;
-      letter-spacing: -0.5px;
-    }
-
-    /* ── PARTIES ────────────────────────────────────────────── */
-    .parties {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 16px;
-    }
-
-    .party-block {
-      flex: 1;
-      background: #f8fafc;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      padding: 10px 14px;
-    }
-
-    .party-title {
-      font-size: 8.5px;
-      font-weight: 700;
-      letter-spacing: .6px;
-      color: #6b7280;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-      padding-bottom: 4px;
-      border-bottom: 1px solid #e5e7eb;
-    }
-
-    .party-name {
-      font-size: 12px;
-      font-weight: 700;
-      color: #111827;
-      margin-bottom: 4px;
-    }
-
-    .party-detail {
-      font-size: 9.5px;
-      color: #6b7280;
-      line-height: 1.65;
-    }
-
-    /* ── DATOS COMPROBANTE ──────────────────────────────────── */
-    .meta-section {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 16px;
-    }
-
-    .meta-block {
-      flex: 1;
-      background: #fff;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      padding: 10px 14px;
-    }
-
-    .meta-title {
-      font-size: 8.5px;
-      font-weight: 700;
-      letter-spacing: .6px;
-      color: #6b7280;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-    }
-
+    .meta-section { display: flex; gap: 16px; margin-bottom: 16px; }
+    .meta-block { flex: 1; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
+    .meta-title { font-size: 8.5px; font-weight: 700; letter-spacing: .6px; color: #6b7280; text-transform: uppercase; margin-bottom: 6px; }
     .meta-table td { padding: 3px 0; }
 
-    /* ── ITEMS TABLE ────────────────────────────────────────── */
-    .items-section { margin-bottom: 16px; }
-
-    .items-table {
-      width: 100%;
-      border-collapse: collapse;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      overflow: hidden;
-    }
-
-    .items-table thead {
-      background: #1d4ed8;
-    }
-
-    .items-table thead th {
-      padding: 9px 10px;
-      text-align: left;
-      font-size: 8.5px;
-      font-weight: 700;
-      color: #fff;
-      letter-spacing: .4px;
-      text-transform: uppercase;
-    }
-
+    .items-section { margin-bottom: 20px; }
+    .items-table { width: 100%; border-collapse: collapse; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+    .items-table thead { background: #1d4ed8; }
+    .items-table thead th { padding: 9px 10px; text-align: left; font-size: 8.5px; font-weight: 700; color: #fff; letter-spacing: .4px; text-transform: uppercase; }
     .items-table thead th:nth-child(n+4) { text-align: right; }
 
-    /* ── FOOTER AREA ────────────────────────────────────────── */
+    /* ── FOOTER: QR grande + Totales ── */
     .footer-area {
       display: flex;
-      gap: 16px;
+      gap: 20px;
       align-items: flex-start;
+      margin-top: 8px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
     }
 
-    /* QR */
+    /* QR más grande y bien ubicado */
     .qr-block {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 6px;
-      padding: 12px;
+      gap: 8px;
+      padding: 14px;
       border: 1px solid #e5e7eb;
-      border-radius: 8px;
+      border-radius: 10px;
       background: #fff;
-      min-width: 140px;
+      min-width: 190px;
     }
-
     .qr-block img {
-      width: 110px;
-      height: 110px;
+      width: 160px;
+      height: 160px;
       display: block;
+      image-rendering: pixelated;
     }
-
     .qr-label {
       font-size: 7.5px;
       color: #9ca3af;
       text-align: center;
-      line-height: 1.4;
+      line-height: 1.5;
+      max-width: 160px;
     }
+    .qr-label strong { color: #6b7280; }
 
-    /* Totales */
-    .totales-block {
-      flex: 1;
-    }
-
+    .totales-block { flex: 1; }
     .letras-box {
-      background: #f0f9ff;
-      border: 1px solid #bae6fd;
-      border-radius: 6px;
-      padding: 8px 12px;
-      font-size: 9.5px;
-      color: #0369a1;
-      font-weight: 600;
-      margin-bottom: 10px;
+      background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;
+      padding: 8px 12px; font-size: 9.5px; color: #0369a1; font-weight: 600; margin-bottom: 10px;
     }
+    .totales-table { width: 100%; border-collapse: collapse; }
+    .totales-table tr td { padding: 5px 10px; font-size: 10.5px; }
+    .totales-table tr td:last-child { text-align: right; font-weight: 600; min-width: 90px; }
+    .totales-table .total-row { background: #1d4ed8; color: #fff; border-radius: 4px; }
+    .totales-table .total-row td { font-size: 13px; font-weight: 800; padding: 9px 10px; }
 
-    .totales-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    .totales-table tr td {
-      padding: 4px 10px;
-      font-size: 10.5px;
-    }
-
-    .totales-table tr td:last-child {
-      text-align: right;
-      font-weight: 600;
-      min-width: 90px;
-    }
-
-    .totales-table .total-row {
-      background: #1d4ed8;
-      color: #fff;
-      border-radius: 4px;
-    }
-
-    .totales-table .total-row td {
-      font-size: 13px;
-      font-weight: 800;
-      padding: 8px 10px;
-    }
-
-    /* ── ESTADO SUNAT ───────────────────────────────────────── */
     .estado-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 12px;
-      background: #f9fafb;
-      border: 1px solid #e5e7eb;
-      border-radius: 6px;
-      margin-bottom: 12px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 12px; background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 6px; margin-bottom: 12px;
     }
-
-    /* ── WATERMARK ANULADA ──────────────────────────────────── */
     .watermark {
-      position: fixed;
-      top: 50%;
-      left: 50%;
+      position: fixed; top: 50%; left: 50%;
       transform: translate(-50%, -50%) rotate(-35deg);
-      font-size: 90px;
-      font-weight: 900;
-      color: rgba(239, 68, 68, 0.08);
-      letter-spacing: 8px;
-      pointer-events: none;
-      z-index: 0;
-      white-space: nowrap;
+      font-size: 90px; font-weight: 900; color: rgba(239,68,68,0.08);
+      letter-spacing: 8px; pointer-events: none; z-index: 0; white-space: nowrap;
     }
-
-    /* ── PÁGINA FOOTER ──────────────────────────────────────── */
     .page-footer {
-      margin-top: 20px;
-      padding-top: 10px;
-      border-top: 1px solid #e5e7eb;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+      margin-top: 16px; padding-top: 10px; border-top: 1px solid #e5e7eb;
+      display: flex; justify-content: space-between; align-items: center;
     }
-
-    .page-footer-text {
-      font-size: 8px;
-      color: #9ca3af;
-    }
+    .page-footer-text { font-size: 8px; color: #9ca3af; }
   </style>
 </head>
 <body>
@@ -396,7 +207,6 @@ export function buildHtmlFactura(f, qrDataUrl) {
         ${process.env.EMISOR_DIRECCION || ''} ${process.env.EMISOR_CIUDAD ? '· ' + process.env.EMISOR_CIUDAD : ''}
       </div>
     </div>
-
     <div class="doc-box">
       <div class="doc-tipo">${tipoLabel}</div>
       <div class="doc-ruc">RUC: ${f.emisor_ruc}</div>
@@ -407,7 +217,7 @@ export function buildHtmlFactura(f, qrDataUrl) {
   <!-- ESTADO -->
   <div class="estado-bar">
     <span style="font-size:9.5px;color:#6b7280">
-      Estado del comprobante:&nbsp;&nbsp;${estadoBadge(f.estado)}
+      Estado:&nbsp;&nbsp;${estadoBadge(f.estado)}
     </span>
     ${f.sunat_estado ? `<span style="font-size:9px;color:#6b7280">SUNAT: <strong>${f.sunat_estado}</strong></span>` : ''}
     ${f.hash ? `<span style="font-size:8px;color:#9ca3af;font-family:monospace">Hash: ${String(f.hash).substring(0, 20)}…</span>` : ''}
@@ -424,19 +234,18 @@ export function buildHtmlFactura(f, qrDataUrl) {
         ${process.env.EMISOR_CIUDAD || ''}
       </div>
     </div>
-
     <div class="party-block">
       <div class="party-title">Cliente / Receptor</div>
       <div class="party-name">${f.cliente_nombre}</div>
       <div class="party-detail">
         ${f.cliente_tipo_doc || 'RUC'}: ${f.cliente_doc}<br>
         ${f.cliente_direccion ? f.cliente_direccion + '<br>' : ''}
-        ${f.cliente_email ? f.cliente_email : ''}
+        ${f.cliente_email || ''}
       </div>
     </div>
   </div>
 
-  <!-- DATOS DEL COMPROBANTE -->
+  <!-- DATOS -->
   <div class="meta-section">
     <div class="meta-block">
       <div class="meta-title">Datos del comprobante</div>
@@ -456,7 +265,6 @@ export function buildHtmlFactura(f, qrDataUrl) {
         </tr>
       </table>
     </div>
-
     ${f.panel_nombre || f.concepto || f.periodo_inicio ? `
     <div class="meta-block">
       <div class="meta-title">Detalle de servicio</div>
@@ -482,29 +290,25 @@ export function buildHtmlFactura(f, qrDataUrl) {
           <th style="width:80px;text-align:right">Total</th>
         </tr>
       </thead>
-      <tbody>
-        ${itemsHtml}
-      </tbody>
+      <tbody>${itemsHtml}</tbody>
     </table>
   </div>
 
   <!-- FOOTER: QR + TOTALES -->
   <div class="footer-area">
 
-    <!-- QR SUNAT -->
+    <!-- QR SUNAT — 160×160px, legible con cualquier escáner -->
     <div class="qr-block">
       <img src="${qrDataUrl}" alt="Código QR SUNAT" />
       <div class="qr-label">
-        Representación impresa de<br>
-        comprobante electrónico.<br>
-        Verifique en: <strong>sunat.gob.pe</strong>
+        Representación impresa de<br>comprobante electrónico.<br>
+        Consulte en <strong>sunat.gob.pe</strong>
       </div>
     </div>
 
     <!-- TOTALES -->
     <div class="totales-block">
       <div class="letras-box">${montoEnLetras(f.total)}</div>
-
       <table class="totales-table">
         ${!f.es_exonerado ? `
         <tr>
@@ -515,20 +319,19 @@ export function buildHtmlFactura(f, qrDataUrl) {
           <td style="color:#6b7280">Op. Exonerada:</td>
           <td>S/ ${fmt(f.op_exonerada || f.subtotal)}</td>
         </tr>`}
-
         <tr>
           <td style="color:#6b7280">IGV (18%):</td>
           <td>S/ ${fmt(f.igv)}</td>
         </tr>
-
         ${f.descuento > 0 ? `
         <tr>
           <td style="color:#ef4444">Descuento:</td>
           <td style="color:#ef4444">- S/ ${fmt(f.descuento)}</td>
         </tr>` : ''}
-
         <tr>
-          <td colspan="2" style="padding:0"><hr style="border:none;border-top:1px solid #e5e7eb;margin:6px 0"></td>
+          <td colspan="2" style="padding:0">
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:6px 0">
+          </td>
         </tr>
         <tr class="total-row">
           <td>TOTAL A PAGAR</td>
@@ -538,7 +341,7 @@ export function buildHtmlFactura(f, qrDataUrl) {
     </div>
   </div>
 
-  <!-- PÁGINA FOOTER -->
+  <!-- PIE DE PÁGINA -->
   <div class="page-footer">
     <div class="page-footer-text">
       Comprobante emitido electrónicamente · R.S. 097-2012/SUNAT · ${f.emisor_ruc}
