@@ -9,7 +9,13 @@ import QRCode    from 'qrcode'
 import { buildHtmlFactura } from '../templates/factura.html.js'
 
 // ── Cadena QR exigida por SUNAT ───────────────────────────────────
-// Formato: RUC|TIPO|SERIE|NUMERO|IGV|TOTAL|FECHA|TIPO_DOC_CLI|NRO_DOC_CLI
+// Formato URL oficial SUNAT:
+// https://factura.sunat.gob.pe/validarComprobante
+//   #RUC|TIPO|SERIE|NUMERO|IGV|TOTAL|FECHA|TIPO_DOC_CLI|NRO_DOC_CLI
+//
+// Al escanear abre directamente el portal de validación de SUNAT.
+// Antes generábamos solo la cadena de datos (sin URL) y los teléfonos
+// la interpretaban como número de teléfono por los 11 dígitos del RUC.
 function buildCadenaQR(factura) {
   const tipoDocCliente =
     factura.cliente_tipo_doc === 'DNI' ? '1' :
@@ -17,7 +23,7 @@ function buildCadenaQR(factura) {
     factura.cliente_tipo_doc === 'CE'  ? '4' :
     factura.cliente_tipo_doc === 'PAS' ? '7' : '6'
 
-  const cadena = [
+  const datos = [
     factura.emisor_ruc,
     factura.tipo_doc,
     factura.serie,
@@ -29,8 +35,12 @@ function buildCadenaQR(factura) {
     factura.cliente_doc,
   ].join('|')
 
-  console.log('🔲 QR cadena SUNAT:', cadena)
-  return cadena
+  // URL oficial del portal de validación de SUNAT
+  // Al escanear → abre el navegador → valida el comprobante en línea
+  const urlQR = `https://factura.sunat.gob.pe/validarComprobante#${datos}`
+
+  console.log('🔲 QR URL SUNAT:', urlQR)
+  return urlQR
 }
 
 async function generarQRDataUrl(factura) {
