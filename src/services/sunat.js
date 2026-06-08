@@ -2,6 +2,7 @@
 // SUNAT API DIRECTA — 100% GRATUITO
 // ══════════════════════════════════════════════════════════════════
 
+import crypto from "crypto";
 import axios from "axios";
 import { SignedXml } from "xml-crypto";
 import forge from "node-forge";
@@ -24,9 +25,6 @@ let tokenCache = { token: null, expira: 0 };
 let _certPems  = null;  // { privateKeyPem, certPem }
 
 // ── Leer el .p12 y extraer clave privada + certificado como PEM ───
-// El código anterior pasaba el buffer crudo a xml-crypto (formato incorrecto).
-// xml-crypto requiere strings PEM. Usamos node-forge para parsear el PKCS#12
-// correctamente, usando SUNAT_CERT_PASS para desencriptar la clave privada.
 function getCertPems() {
   if (_certPems) return _certPems;
 
@@ -100,6 +98,10 @@ export const getTokenSunat = async () => {
 };
 
 // ── Firmar XML con el certificado .p12 ───────────────────────────
+// FIX #1: La firma se inserta dentro de <ext:ExtensionContent>
+// que es donde SUNAT la requiere según el estándar UBL 2.1 de Perú.
+// xml-crypto por defecto la pone al final del elemento raíz, lo que
+// causa rechazo en SUNAT.
 export const firmarXml = (xmlString, tipoDoc = "01") => {
   const { privateKeyPem, certPem } = getCertPems();
 
@@ -125,7 +127,23 @@ export const firmarXml = (xmlString, tipoDoc = "01") => {
   sig.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
   sig.signatureAlgorithm      = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
   sig.computeSignature(xmlString);
-  return sig.getSignedXml();
+
+  let signedXml = sig.getSignedXml();
+
+  // ✅ FIX #1 — Mover la firma dentro de <ext:ExtensionContent>
+  // SUNAT exige: <ext:ExtensionContent><Signature .../></ext:ExtensionContent>
+  const sigMatch = signedXml.match(/<Signature[\s\S]*?<\/Signature>/);
+  if (sigMatch) {
+    // 1. Quitar la firma del final (donde xml-crypto la pone por defecto)
+    signedXml = signedXml.replace(sigMatch[0], "");
+    // 2. Insertar dentro de ExtensionContent (el placeholder vacío del XML)
+    signedXml = signedXml.replace(
+      "<ext:ExtensionContent/>",
+      `<ext:ExtensionContent>${sigMatch[0]}</ext:ExtensionContent>`
+    );
+  }
+
+  return signedXml;
 };
 
 // ── Enviar comprobante a SUNAT ────────────────────────────────────
@@ -141,15 +159,21 @@ export const enviarASunat = async (facturaId, factura, items) => {
     // Firmar pasando el tipo de doc para el xpath correcto
     const xmlFirmado = firmarXml(xml, factura.tipo_doc);
 
-    const nombre   = `${factura.emisor_ruc}-${factura.tipo_doc}-${factura.serie}-${String(factura.numero).padStart(8, "0")}`;
+    const nombre    = `${factura.emisor_ruc}-${factura.tipo_doc}-${factura.serie}-${String(factura.numero).padStart(8, "0")}`;
     const xmlBase64 = Buffer.from(xmlFirmado, "utf8").toString("base64");
+
+    // ✅ FIX #2 — hashZip: SHA-256 del contenido XML (obligatorio en producción)
+    const hashZip = crypto
+      .createHash("sha256")
+      .update(xmlFirmado, "utf8")
+      .digest("hex");
 
     const token = await getTokenSunat();
     const ruc   = process.env.EMISOR_RUC;
 
     const { data } = await axios.post(
       `${CPE_BASE}/comprobantes`,
-      { archivo: { nomArchivo: `${nombre}.xml`, arcGreZip: xmlBase64, hashZip: "" } },
+      { archivo: { nomArchivo: `${nombre}.xml`, arcGreZip: xmlBase64, hashZip } },
       {
         headers: {
           Authorization:  `Bearer ${token}`,
