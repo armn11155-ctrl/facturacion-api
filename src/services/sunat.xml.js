@@ -55,13 +55,62 @@ const buildLineas = (items, exonerado) =>
   </cac:InvoiceLine>`
   }).join('')
 
+// ── Líneas de detalle para Nota de Crédito (CreditNoteLine) ──────
+// FIX #3: Nota de Crédito requiere <cac:CreditNoteLine> y
+// <cbc:CreditedQuantity> en vez de InvoiceLine/InvoicedQuantity.
+const buildLineasNC = (items, exonerado) =>
+  items.map((item, i) => {
+    const tipoIgv    = exonerado ? 'EXO' : (item.tipo_igv || 'GRA')
+    const codTributo = tipoIgv === 'GRA' ? '1000' : tipoIgv === 'EXO' ? '9997' : '9998'
+    const nomTributo = tipoIgv === 'GRA' ? 'IGV' : tipoIgv === 'EXO' ? 'EXO' : 'INA'
+    const pctIgv     = tipoIgv === 'GRA' ? '18.00' : '0.00'
+
+    return `
+  <cac:CreditNoteLine>
+    <cbc:ID>${i + 1}</cbc:ID>
+    <cbc:CreditedQuantity unitCode="${item.unidad_medida || 'ZZ'}">${Number(item.cantidad).toFixed(4)}</cbc:CreditedQuantity>
+    <cbc:LineExtensionAmount currencyID="PEN">${Number(item.subtotal).toFixed(2)}</cbc:LineExtensionAmount>
+    <cac:PricingReference>
+      <cac:AlternativeConditionPrice>
+        <cbc:PriceAmount currencyID="PEN">${Number(item.precio_unitario * (tipoIgv === 'GRA' ? 1.18 : 1)).toFixed(2)}</cbc:PriceAmount>
+        <cbc:PriceTypeCode>${tipoIgv === 'GRA' ? '01' : '02'}</cbc:PriceTypeCode>
+      </cac:AlternativeConditionPrice>
+    </cac:PricingReference>
+    <cac:TaxTotal>
+      <cbc:TaxAmount currencyID="PEN">${Number(item.igv_item).toFixed(2)}</cbc:TaxAmount>
+      <cac:TaxSubtotal>
+        <cbc:TaxableAmount currencyID="PEN">${Number(item.subtotal).toFixed(2)}</cbc:TaxableAmount>
+        <cbc:TaxAmount currencyID="PEN">${Number(item.igv_item).toFixed(2)}</cbc:TaxAmount>
+        <cac:TaxCategory>
+          <cbc:ID schemeAgencyName="PE:SUNAT" schemeName="Codigo de tributos">${codTributo}</cbc:ID>
+          <cbc:Percent>${pctIgv}</cbc:Percent>
+          <cbc:TaxExemptionReasonCode>${tipoIgv === 'GRA' ? '10' : tipoIgv === 'EXO' ? '20' : '30'}</cbc:TaxExemptionReasonCode>
+          <cac:TaxScheme>
+            <cbc:ID>${codTributo}</cbc:ID>
+            <cbc:Name>${nomTributo}</cbc:Name>
+            <cbc:TaxTypeCode>VAT</cbc:TaxTypeCode>
+          </cac:TaxScheme>
+        </cac:TaxCategory>
+      </cac:TaxSubtotal>
+    </cac:TaxTotal>
+    <cac:Item>
+      <cbc:Description><![CDATA[${item.descripcion}]]></cbc:Description>
+      <cac:SellersItemIdentification>
+        <cbc:ID>${item.codigo || String(i + 1).padStart(3, '0')}</cbc:ID>
+      </cac:SellersItemIdentification>
+    </cac:Item>
+    <cac:Price>
+      <cbc:PriceAmount currencyID="PEN">${Number(item.precio_unitario).toFixed(2)}</cbc:PriceAmount>
+    </cac:Price>
+  </cac:CreditNoteLine>`
+  }).join('')
+
 // ── Bloque de impuestos totales ───────────────────────────────────
 const buildTaxTotal = (f) => {
-  const exo = f.es_exonerado
-  const gravado = Number(f.op_gravada || 0)
+  const gravado   = Number(f.op_gravada  || 0)
   const exonerado = Number(f.op_exonerada || 0)
-  const inafecto = Number(f.op_inafecta || 0)
-  const igv = Number(f.igv)
+  const inafecto  = Number(f.op_inafecta  || 0)
+  const igv       = Number(f.igv)
 
   const lineas = []
 
@@ -111,6 +160,39 @@ const buildTaxTotal = (f) => {
   </cac:TaxTotal>`
 }
 
+// ── Datos del cliente según tipo de documento ─────────────────────
+// FIX #4: Boletas pueden ser con DNI (código 1) o RUC (código 6).
+// El schemeName y schemeURI deben corresponder al tipo de doc.
+const buildClienteInfo = (f) => {
+  const esDni    = f.cliente_tipo_doc === 'DNI' || f.cliente_tipo_doc === '1'
+  const esCE     = f.cliente_tipo_doc === 'CE'  || f.cliente_tipo_doc === '4'
+  const codDoc   = esDni ? '1' : esCE ? '4' : '6'
+  const nombreScheme = esDni
+    ? 'Documento Nacional de Identidad'
+    : esCE
+      ? 'Carnet de Extranjería'
+      : 'Registro Único de Contribuyentes'
+
+  return `
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyIdentification>
+        <cbc:ID schemeID="${codDoc}" schemeAgencyName="PE:SUNAT"
+          schemeName="${nombreScheme}"
+          schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
+          ${f.cliente_doc}
+        </cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName><![CDATA[${f.cliente_nombre}]]></cbc:RegistrationName>
+        <cac:RegistrationAddress>
+          <cbc:AddressLine><cbc:Line><![CDATA[${f.cliente_direccion || ''}]]></cbc:Line></cbc:AddressLine>
+        </cac:RegistrationAddress>
+      </cac:PartyLegalEntity>
+    </cac:Party>
+  </cac:AccountingCustomerParty>`
+}
+
 // ── FACTURA ELECTRÓNICA (tipo 01) ─────────────────────────────────
 export const buildXmlFactura = (f, items) => {
   const serie  = f.serie
@@ -155,7 +237,9 @@ export const buildXmlFactura = (f, items) => {
   <cac:AccountingSupplierParty>
     <cac:Party>
       <cac:PartyIdentification>
-        <cbc:ID schemeAgencyName="PE:SUNAT" schemeName="Registro Único de Contribuyentes" schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
+        <cbc:ID schemeID="6" schemeAgencyName="PE:SUNAT"
+          schemeName="Registro Único de Contribuyentes"
+          schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
           ${f.emisor_ruc}
         </cbc:ID>
       </cac:PartyIdentification>
@@ -172,21 +256,7 @@ export const buildXmlFactura = (f, items) => {
     </cac:Party>
   </cac:AccountingSupplierParty>
 
-  <cac:AccountingCustomerParty>
-    <cac:Party>
-      <cac:PartyIdentification>
-        <cbc:ID schemeAgencyName="PE:SUNAT" schemeName="Registro Único de Contribuyentes" schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
-          ${f.cliente_doc}
-        </cbc:ID>
-      </cac:PartyIdentification>
-      <cac:PartyLegalEntity>
-        <cbc:RegistrationName><![CDATA[${f.cliente_nombre}]]></cbc:RegistrationName>
-        <cac:RegistrationAddress>
-          <cbc:AddressLine><cbc:Line><![CDATA[${f.cliente_direccion || ''}]]></cbc:Line></cbc:AddressLine>
-        </cac:RegistrationAddress>
-      </cac:PartyLegalEntity>
-    </cac:Party>
-  </cac:AccountingCustomerParty>
+  ${buildClienteInfo(f)}
 
   ${buildTaxTotal(f)}
 
@@ -205,8 +275,8 @@ export const buildXmlFactura = (f, items) => {
 
 // ── BOLETA DE VENTA (tipo 03) ─────────────────────────────────────
 export const buildXmlBoleta = (f, items) => {
-  // La boleta usa el mismo formato Invoice de UBL 2.1
-  // solo cambia el InvoiceTypeCode (03) y el tipo de doc del cliente (1=DNI)
+  // FIX #4 aplicado: buildClienteInfo ya distingue DNI/RUC automáticamente.
+  // Solo cambia el InvoiceTypeCode (03) respecto a la factura.
   const xml = buildXmlFactura(f, items)
   return xml
     .replace('>01</cbc:InvoiceTypeCode>', '>03</cbc:InvoiceTypeCode>')
@@ -248,7 +318,7 @@ export const buildXmlNotaCredito = (f, items) => {
     <cbc:PayableAmount currencyID="PEN">${Number(f.total).toFixed(2)}</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>
 
-  ${buildLineas(items, f.es_exonerado).replace(/InvoiceLine/g, 'CreditNoteLine')}
+  ${buildLineasNC(items, f.es_exonerado)}
 
 </CreditNote>`
 }
