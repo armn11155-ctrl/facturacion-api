@@ -1,6 +1,6 @@
 import { getDb } from "../lib/firebase.js";
-import { enviarASunat } from "../services/sunat.js";
-import { generarPdfFactura } from "../services/pdf.js";
+import { enviarASunat, enviarComunicacionBaja } from "../services/sunat.js";
+import { generarPdfFactura, generarPdfTicket } from "../services/pdf.js";
 import { FieldValue } from "firebase-admin/firestore";
 
 const COL = "facturas";
@@ -62,7 +62,6 @@ export const crear = async (req, res) => {
     if (!items.length) return res.status(400).json({ ok: false, error: "Se requiere al menos un ítem" });
     if (!cliente_doc)  return res.status(400).json({ ok: false, error: "RUC/DNI del cliente requerido" });
 
-    // Número correlativo — buscar el último de esta serie
     const lastSnap = await db.collection(COL)
       .where("serie", "==", serie)
       .where("tipo_doc", "==", tipo_doc)
@@ -74,7 +73,6 @@ export const crear = async (req, res) => {
     const numero = lastSnap.empty ? 1 : (lastSnap.docs[0].data().numero || 0) + 1;
     const numero_fmt = `${serie}-${String(numero).padStart(8, "0")}`;
 
-    // Calcular totales
     let opGravada = 0, totalIgv = 0;
     const itemsCalc = items.map((item, idx) => {
       const cant     = Number(item.cantidad || 1);
@@ -122,27 +120,17 @@ export const crear = async (req, res) => {
 
     const ref = await db.collection(COL).add(factura);
 
-    // ── Auto-crear contrato en Firestore si la factura tiene período ────
     if (periodo_inicio && periodo_fin && panel_id) {
       try {
         await db.collection("contratos").add({
-          panel_id,
-          cliente_id:      cliente_id || null,
-          cara:            cara_panel || null,
-          inicio:          periodo_inicio,
-          fin:             periodo_fin,
-          monto:           totalFinal,
-          pagado:          false,
-          pagosMeses:      {},
-          factura_id:      ref.id,
-          factura_numero:  numero_fmt,
-          deleted:         false,
-          origen:          "facturacion_api",
-          createdAt:       FieldValue.serverTimestamp(),
+          panel_id, cliente_id: cliente_id || null, cara: cara_panel || null,
+          inicio: periodo_inicio, fin: periodo_fin, monto: totalFinal,
+          pagado: false, pagosMeses: {}, factura_id: ref.id,
+          factura_numero: numero_fmt, deleted: false, origen: "facturacion_api",
+          createdAt: FieldValue.serverTimestamp(),
         });
-        console.log(`✅ Contrato creado en Firestore para factura ${numero_fmt}`);
       } catch (cErr) {
-        console.error("⚠️ Error al crear contrato en Firestore:", cErr.message);
+        console.error("⚠️ Error al crear contrato:", cErr.message);
       }
     }
 
@@ -163,57 +151,31 @@ export const emitir = async (req, res) => {
 
     const factura = { id: doc.id, ...doc.data() };
 
-    if (["Emitida", "Aceptada", "Cobrada"].includes(factura.estado)) {
+    if (["Emitida","Aceptada","Cobrada"].includes(factura.estado)) {
       return res.json({
         ok: true,
         mensaje: `La factura ya está en estado "${factura.estado}"`,
         idempotente: true,
-        data: {
-          id:           factura.id,
-          estado:       factura.estado,
-          sunat_estado: factura.sunat_estado || null,
-          cdr_url:      factura.cdr_url      || null,
-          hash:         factura.hash         || null,
-          numero_fmt:   factura.numero_fmt   || null,
-        },
+        data: { id: factura.id, estado: factura.estado, sunat_estado: factura.sunat_estado || null,
+                cdr_url: factura.cdr_url || null, hash: factura.hash || null, numero_fmt: factura.numero_fmt || null },
       });
     }
 
-    if (["Anulada", "Rechazada"].includes(factura.estado)) {
-      return res.status(400).json({
-        ok: false,
-        error: `No se puede emitir una factura en estado "${factura.estado}". Crea una nueva factura.`,
-      });
+    if (["Anulada","Rechazada"].includes(factura.estado)) {
+      return res.status(400).json({ ok: false, error: `No se puede emitir una factura en estado "${factura.estado}".` });
     }
 
     if (factura.estado === "Emitiendo") {
-      return res.status(409).json({
-        ok: false,
-        error: "Esta factura ya está siendo emitida. Espera unos segundos y refresca la lista.",
-      });
+      return res.status(409).json({ ok: false, error: "Esta factura ya está siendo emitida." });
     }
-    await docRef.update({
-      estado: "Emitiendo",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+
+    await docRef.update({ estado: "Emitiendo", updatedAt: FieldValue.serverTimestamp() });
 
     try {
       const result = await enviarASunat(req.params.id, factura, factura.items || []);
-      res.json({
-        ok:      true,
-        mensaje: result.mensaje,
-        data: {
-          id:      factura.id,
-          estado:  "Emitida",
-          cdr_url: result.cdrUrl,
-        },
-      });
+      res.json({ ok: true, mensaje: result.mensaje, data: { id: factura.id, estado: "Emitida", cdr_url: result.cdrUrl } });
     } catch (sunatErr) {
-      await docRef.update({
-        estado: "Borrador",
-        sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      await docRef.update({ estado: "Borrador", sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT", updatedAt: FieldValue.serverTimestamp() });
       throw sunatErr;
     }
   } catch (err) {
@@ -239,36 +201,101 @@ export const cobrar = async (req, res) => {
 };
 
 // ── POST /api/facturas/:id/anular ─────────────────────────────────
+// Lógica:
+//   - Borrador/Pendiente → anulación local (sin RA, sin enviar a SUNAT)
+//   - Emitida/Aceptada + tipo 01/07/08 → envía RA (Comunicación de Baja)
+//   - Emitida/Aceptada + tipo 03 → anulación local + marcada para próximo RC
+//   - Anulada → idempotente
 export const anular = async (req, res) => {
   try {
     const db = getDb();
     const { motivo } = req.body;
-    await db.collection(COL).doc(req.params.id).update({
-      estado: "Anulada",
-      sunat_mensaje: motivo || "Anulado por el usuario",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    res.json({ ok: true, mensaje: "Factura anulada" });
+    const docRef = db.collection(COL).doc(req.params.id);
+    const doc    = await docRef.get();
+
+    if (!doc.exists) return res.status(404).json({ ok: false, error: "Factura no encontrada" });
+
+    const factura = { id: doc.id, ...doc.data() };
+
+    // Idempotente
+    if (factura.estado === "Anulada") {
+      return res.json({ ok: true, mensaje: "La factura ya está anulada", idempotente: true });
+    }
+
+    // Solo borradores y pendientes → anulación local sin RA
+    if (["Borrador","Pendiente"].includes(factura.estado)) {
+      await docRef.update({
+        estado: "Anulada",
+        sunat_mensaje: motivo || "Anulado por el usuario (sin envío a SUNAT)",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return res.json({ ok: true, mensaje: "Factura anulada localmente (no había sido enviada a SUNAT)" });
+    }
+
+    // Facturas ya enviadas a SUNAT
+    if (["Emitida","Aceptada","Vencida"].includes(factura.estado)) {
+      // Boletas → anulación local, se declarará en el próximo RC con instrucción 03
+      if (factura.tipo_doc === "03") {
+        await docRef.update({
+          estado: "Anulada",
+          sunat_mensaje: motivo || "Anulado — se declarará en próximo Resumen Diario (RC)",
+          rc_pendiente_anulacion: true,   // flag para el cron de RC
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return res.json({
+          ok: true,
+          mensaje: "Boleta anulada localmente. Se incluirá en el próximo Resumen Diario (RC) enviado a SUNAT.",
+        });
+      }
+
+      // Facturas/NC/ND → enviar RA (Comunicación de Baja)
+      try {
+        const result = await enviarComunicacionBaja(req.params.id, factura, motivo);
+        return res.json({
+          ok: true,
+          mensaje: "Comunicación de Baja enviada a SUNAT correctamente",
+          ra_id: result.raId,
+        });
+      } catch (raErr) {
+        // RA rechazado → marcar error pero retornar detalles
+        return res.status(422).json({
+          ok: false,
+          error: raErr.message,
+          hint: "La Comunicación de Baja fue rechazada por SUNAT. Revise eventos_sunat para detalles.",
+        });
+      }
+    }
+
+    // Estados no anulables
+    return res.status(400).json({ ok: false, error: `No se puede anular una factura en estado "${factura.estado}"` });
+
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 };
 
-// ── GET /api/facturas/:id/pdf ─────────────────────────────────────
+// ── GET /api/facturas/:id/pdf?formato=ticket|a4 ───────────────────
+// ?formato=ticket → PDF 80mm (impresora térmica)
+// ?formato=a4     → PDF A4 estándar (default)
 export const descargarPdf = async (req, res) => {
   try {
-    const db  = getDb();
-    const doc = await db.collection(COL).doc(req.params.id).get();
+    const db      = getDb();
+    const formato = (req.query.formato || "a4").toLowerCase();
+    const doc     = await db.collection(COL).doc(req.params.id).get();
 
-    if (!doc.exists) {
-      return res.status(404).json({ ok: false, error: "Factura no encontrada" });
-    }
+    if (!doc.exists) return res.status(404).json({ ok: false, error: "Factura no encontrada" });
 
     const factura = { id: doc.id, ...doc.data() };
 
-    const { pdfBuffer, qrCadena } = await generarPdfFactura(factura);
+    let pdfBuffer, qrCadena;
 
-    const nombre = `${factura.numero_fmt || factura.serie + "-" + String(factura.numero).padStart(8,"0")}.pdf`;
+    if (formato === "ticket") {
+      ({ pdfBuffer, qrCadena } = await generarPdfTicket(factura));
+    } else {
+      ({ pdfBuffer, qrCadena } = await generarPdfFactura(factura));
+    }
+
+    const nombre = `${factura.numero_fmt || factura.serie + "-" + String(factura.numero).padStart(8,"0")}${formato === "ticket" ? "_ticket" : ""}.pdf`;
 
     res.set({
       "Content-Type":        "application/pdf",
