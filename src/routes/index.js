@@ -42,9 +42,10 @@ router.post('/facturas/:id/cobrar',  authJWT, factCtrl.cobrar)
 router.post('/facturas/:id/anular',  authJWT, factCtrl.anular)
 
 // ── CLIENTES ──────────────────────────────────────────────────────
-router.get ('/clientes',            auth, cliCtrl.listar)
-router.post('/clientes',            authJWT, cliCtrl.crear)
-router.put ('/clientes/:id',        authJWT, cliCtrl.actualizar)
+router.get   ('/clientes',        auth,    cliCtrl.listar)
+router.post  ('/clientes',        authJWT, cliCtrl.crear)
+router.put   ('/clientes/:id',    authJWT, cliCtrl.actualizar)
+router.delete('/clientes/:id',    authJWT, cliCtrl.eliminar)
 
 // ── VISTA360 — Facturas por panel/cliente ─────────────────────────
 router.get('/vista360/facturas', authApiKey, async (req, res) => {
