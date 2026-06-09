@@ -40,3 +40,18 @@ export const actualizar = async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 };
+
+// Soft-delete: marca el cliente como deleted:true en vez de borrarlo físicamente.
+// Así las facturas que referencian al cliente siguen teniendo su historial.
+export const eliminar = async (req, res) => {
+  try {
+    const db  = getDb();
+    const ref = db.collection(COL).doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ ok: false, error: "Cliente no encontrado" });
+    await ref.update({ deleted: true, updatedAt: FieldValue.serverTimestamp() });
+    res.json({ ok: true, mensaje: "Cliente eliminado" });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+};
