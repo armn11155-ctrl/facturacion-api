@@ -218,12 +218,12 @@ const buildEmisorInfo = (f) => `
   </cac:AccountingSupplierParty>`
 
 // ── Bloque de firma (reutilizable) ───────────────────────────────
-const buildSignature = (f) => `
+const buildSignature = (ruc, razon) => `
   <cac:Signature>
     <cbc:ID>IDSignature</cbc:ID>
     <cac:SignatoryParty>
-      <cac:PartyIdentification><cbc:ID>${f.emisor_ruc}</cbc:ID></cac:PartyIdentification>
-      <cac:PartyName><cbc:Name><![CDATA[${f.emisor_razon}]]></cbc:Name></cac:PartyName>
+      <cac:PartyIdentification><cbc:ID>${ruc}</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name><![CDATA[${razon}]]></cbc:Name></cac:PartyName>
     </cac:SignatoryParty>
     <cac:DigitalSignatureAttachment>
       <cac:ExternalReference><cbc:URI>#SignatureSP</cbc:URI></cac:ExternalReference>
@@ -260,7 +260,7 @@ export const buildXmlFactura = (f, items) => {
   <cbc:Note languageLocaleID="1000"><![CDATA[SON: ${Math.floor(f.total)} CON ${String(Math.round((f.total - Math.floor(f.total)) * 100)).padStart(2,'0')}/100 SOLES]]></cbc:Note>
   <cbc:DocumentCurrencyCode listID="ISO 4217 Alpha" listAgencyName="United Nations Economic Commission for Europe" listName="Currency">PEN</cbc:DocumentCurrencyCode>
 
-  ${buildSignature(f)}
+  ${buildSignature(f.emisor_ruc, f.emisor_razon)}
 
   <cac:AccountingSupplierParty>
     <cac:Party>
@@ -309,8 +309,6 @@ export const buildXmlBoleta = (f, items) => {
 }
 
 // ── NOTA DE CRÉDITO (tipo 07) ─────────────────────────────────────
-// FIX: ahora incluye Signature, AccountingSupplierParty y
-// AccountingCustomerParty que SUNAT requiere obligatoriamente.
 export const buildXmlNotaCredito = (f, items) => {
   const serie  = f.serie
   const numero = pad(f.numero)
@@ -342,7 +340,7 @@ export const buildXmlNotaCredito = (f, items) => {
     </cac:InvoiceDocumentReference>
   </cac:BillingReference>
 
-  ${buildSignature(f)}
+  ${buildSignature(f.emisor_ruc, f.emisor_razon)}
 
   ${buildEmisorInfo(f)}
 
@@ -360,4 +358,117 @@ export const buildXmlNotaCredito = (f, items) => {
   ${buildLineasNC(items, f.es_exonerado)}
 
 </CreditNote>`
+}
+
+// ══════════════════════════════════════════════════════════════════
+// COMUNICACIÓN DE BAJA (RA) — VoidedDocuments UBL
+// SUNAT exige este XML para anular comprobantes ya enviados.
+// Nombre de archivo: {RUC}-RA-{YYYYMMDD}-{correlativo}.zip
+// ══════════════════════════════════════════════════════════════════
+export const buildXmlRA = ({ ruc, razon, fechaRef, fechaEmision, correlativo, lineas }) => {
+  const raId = `RA-${fechaEmision.replace(/-/g,'')}-${String(correlativo).padStart(3,'0')}`
+  const lineasXml = lineas.map((l, i) => `
+  <sac:VoidedDocumentsLine>
+    <cbc:LineID>${i + 1}</cbc:LineID>
+    <cbc:DocumentTypeCode>${l.tipo_doc}</cbc:DocumentTypeCode>
+    <sac:DocumentSerialID>${l.serie}</sac:DocumentSerialID>
+    <sac:DocumentNumberID>${pad(l.numero)}</sac:DocumentNumberID>
+    <sac:VoidReasonDescription><![CDATA[${l.motivo || 'Anulación de la operación'}]]></sac:VoidReasonDescription>
+  </sac:VoidedDocumentsLine>`).join('')
+
+  return `${xmlHeader}
+<VoidedDocuments
+  xmlns="urn:sunat:names:specification:ubl:peru:schema:xsd:VoidedDocuments-1"
+  xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+  xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+  xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
+  xmlns:sac="urn:sunat:names:specification:ubl:peru:schema:xsd:SunatAggregateComponents-1">
+
+  <ext:UBLExtensions><ext:UBLExtension><ext:ExtensionContent/></ext:UBLExtension></ext:UBLExtensions>
+
+  <cbc:ID>${raId}</cbc:ID>
+  <cbc:ReferenceDate>${fechaRef}</cbc:ReferenceDate>
+  <cbc:IssueDate>${fechaEmision}</cbc:IssueDate>
+
+  ${buildSignature(ruc, razon)}
+
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification>
+        <cbc:ID schemeID="6" schemeAgencyName="PE:SUNAT"
+          schemeName="Registro Único de Contribuyentes"
+          schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
+          ${ruc}
+        </cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PartyName><cbc:Name><![CDATA[${razon}]]></cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  ${lineasXml}
+</VoidedDocuments>`
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RESUMEN DIARIO DE BOLETAS (RC) — SummaryDocuments UBL
+// SUNAT exige este XML para declarar boletas del día.
+// Nombre de archivo: {RUC}-RC-{YYYYMMDD}-{correlativo}.zip
+// Cada boleta va como línea individual (StartDocumentNumberID = EndDocumentNumberID).
+// ══════════════════════════════════════════════════════════════════
+export const buildXmlRC = ({ ruc, razon, fechaRef, fechaEmision, correlativo, lineas }) => {
+  const rcId = `RC-${fechaEmision.replace(/-/g,'')}-${String(correlativo).padStart(3,'0')}`
+  const lineasXml = lineas.map((l, i) => {
+    // 01=Adición (emitida), 03=Anulación
+    const instruccion = l.estado === 'Anulada' ? '03' : '01'
+    const igv         = Number(l.igv   || 0)
+    const total       = Number(l.total || 0)
+    return `
+  <sac:SummaryDocumentsLine>
+    <cbc:LineID>${i + 1}</cbc:LineID>
+    <cbc:DocumentTypeCode>03</cbc:DocumentTypeCode>
+    <sac:DocumentSerialID>${l.serie}</sac:DocumentSerialID>
+    <sac:StartDocumentNumberID>${pad(l.numero)}</sac:StartDocumentNumberID>
+    <sac:EndDocumentNumberID>${pad(l.numero)}</sac:EndDocumentNumberID>
+    <sac:CountryIdentificationCode>PE</sac:CountryIdentificationCode>
+    <sac:BillingPayment>
+      <cbc:PaidAmount currencyID="PEN">${total.toFixed(2)}</cbc:PaidAmount>
+      <cbc:InstructionID>${instruccion}</cbc:InstructionID>
+    </sac:BillingPayment>
+    <sac:TaxTotals>
+      <cbc:TaxAmount currencyID="PEN">${igv.toFixed(2)}</cbc:TaxAmount>
+      <cbc:TaxTypeCode>1000</cbc:TaxTypeCode>
+    </sac:TaxTotals>
+    <cbc:TotalAmount currencyID="PEN">${total.toFixed(2)}</cbc:TotalAmount>
+  </sac:SummaryDocumentsLine>`
+  }).join('')
+
+  return `${xmlHeader}
+<SummaryDocuments
+  xmlns="urn:sunat:names:specification:ubl:peru:schema:xsd:SummaryDocuments-1"
+  xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+  xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+  xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
+  xmlns:sac="urn:sunat:names:specification:ubl:peru:schema:xsd:SunatAggregateComponents-1">
+
+  <ext:UBLExtensions><ext:UBLExtension><ext:ExtensionContent/></ext:UBLExtension></ext:UBLExtensions>
+
+  <cbc:ID>${rcId}</cbc:ID>
+  <cbc:ReferenceDate>${fechaRef}</cbc:ReferenceDate>
+  <cbc:IssueDate>${fechaEmision}</cbc:IssueDate>
+
+  ${buildSignature(ruc, razon)}
+
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification>
+        <cbc:ID schemeID="6" schemeAgencyName="PE:SUNAT"
+          schemeName="Registro Único de Contribuyentes"
+          schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
+          ${ruc}
+        </cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PartyName><cbc:Name><![CDATA[${razon}]]></cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  ${lineasXml}
+</SummaryDocuments>`
 }
