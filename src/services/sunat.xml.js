@@ -56,8 +56,6 @@ const buildLineas = (items, exonerado) =>
   }).join('')
 
 // ── Líneas de detalle para Nota de Crédito (CreditNoteLine) ──────
-// FIX #3: Nota de Crédito requiere <cac:CreditNoteLine> y
-// <cbc:CreditedQuantity> en vez de InvoiceLine/InvoicedQuantity.
 const buildLineasNC = (items, exonerado) =>
   items.map((item, i) => {
     const tipoIgv    = exonerado ? 'EXO' : (item.tipo_igv || 'GRA')
@@ -107,7 +105,7 @@ const buildLineasNC = (items, exonerado) =>
 
 // ── Bloque de impuestos totales ───────────────────────────────────
 const buildTaxTotal = (f) => {
-  const gravado   = Number(f.op_gravada  || 0)
+  const gravado   = Number(f.op_gravada   || 0)
   const exonerado = Number(f.op_exonerada || 0)
   const inafecto  = Number(f.op_inafecta  || 0)
   const igv       = Number(f.igv)
@@ -161,8 +159,6 @@ const buildTaxTotal = (f) => {
 }
 
 // ── Datos del cliente según tipo de documento ─────────────────────
-// FIX #4: Boletas pueden ser con DNI (código 1) o RUC (código 6).
-// El schemeName y schemeURI deben corresponder al tipo de doc.
 const buildClienteInfo = (f) => {
   const esDni    = f.cliente_tipo_doc === 'DNI' || f.cliente_tipo_doc === '1'
   const esCE     = f.cliente_tipo_doc === 'CE'  || f.cliente_tipo_doc === '4'
@@ -192,6 +188,47 @@ const buildClienteInfo = (f) => {
     </cac:Party>
   </cac:AccountingCustomerParty>`
 }
+
+// ── Datos del emisor (reutilizable) ──────────────────────────────
+const buildEmisorInfo = (f) => `
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification>
+        <cbc:ID schemeID="6" schemeAgencyName="PE:SUNAT"
+          schemeName="Registro Único de Contribuyentes"
+          schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
+          ${f.emisor_ruc}
+        </cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PartyName><cbc:Name><![CDATA[${f.emisor_razon}]]></cbc:Name></cac:PartyName>
+      <cac:PartyTaxScheme>
+        <cbc:RegistrationName><![CDATA[${f.emisor_razon}]]></cbc:RegistrationName>
+        <cbc:CompanyID schemeAgencyName="PE:SUNAT"
+          schemeName="SUNAT:Identificador de Documento de Identidad"
+          schemeURI="urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo06">
+          ${f.emisor_ruc}
+        </cbc:CompanyID>
+        <cac:RegistrationAddress>
+          <cbc:AddressLine><cbc:Line><![CDATA[${process.env.EMISOR_DIRECCION}]]></cbc:Line></cbc:AddressLine>
+          <cbc:CityName><![CDATA[${process.env.EMISOR_CIUDAD}]]></cbc:CityName>
+        </cac:RegistrationAddress>
+        <cac:TaxScheme><cbc:ID>1000</cbc:ID><cbc:Name>IGV</cbc:Name><cbc:TaxTypeCode>VAT</cbc:TaxTypeCode></cac:TaxScheme>
+      </cac:PartyTaxScheme>
+    </cac:Party>
+  </cac:AccountingSupplierParty>`
+
+// ── Bloque de firma (reutilizable) ───────────────────────────────
+const buildSignature = (f) => `
+  <cac:Signature>
+    <cbc:ID>IDSignature</cbc:ID>
+    <cac:SignatoryParty>
+      <cac:PartyIdentification><cbc:ID>${f.emisor_ruc}</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name><![CDATA[${f.emisor_razon}]]></cbc:Name></cac:PartyName>
+    </cac:SignatoryParty>
+    <cac:DigitalSignatureAttachment>
+      <cac:ExternalReference><cbc:URI>#SignatureSP</cbc:URI></cac:ExternalReference>
+    </cac:DigitalSignatureAttachment>
+  </cac:Signature>`
 
 // ── FACTURA ELECTRÓNICA (tipo 01) ─────────────────────────────────
 export const buildXmlFactura = (f, items) => {
@@ -223,16 +260,7 @@ export const buildXmlFactura = (f, items) => {
   <cbc:Note languageLocaleID="1000"><![CDATA[SON: ${Math.floor(f.total)} CON ${String(Math.round((f.total - Math.floor(f.total)) * 100)).padStart(2,'0')}/100 SOLES]]></cbc:Note>
   <cbc:DocumentCurrencyCode listID="ISO 4217 Alpha" listAgencyName="United Nations Economic Commission for Europe" listName="Currency">PEN</cbc:DocumentCurrencyCode>
 
-  <cac:Signature>
-    <cbc:ID>IDSignature</cbc:ID>
-    <cac:SignatoryParty>
-      <cac:PartyIdentification><cbc:ID>${f.emisor_ruc}</cbc:ID></cac:PartyIdentification>
-      <cac:PartyName><cbc:Name><![CDATA[${f.emisor_razon}]]></cbc:Name></cac:PartyName>
-    </cac:SignatoryParty>
-    <cac:DigitalSignatureAttachment>
-      <cac:ExternalReference><cbc:URI>#SignatureSP</cbc:URI></cac:ExternalReference>
-    </cac:DigitalSignatureAttachment>
-  </cac:Signature>
+  ${buildSignature(f)}
 
   <cac:AccountingSupplierParty>
     <cac:Party>
@@ -275,14 +303,14 @@ export const buildXmlFactura = (f, items) => {
 
 // ── BOLETA DE VENTA (tipo 03) ─────────────────────────────────────
 export const buildXmlBoleta = (f, items) => {
-  // FIX #4 aplicado: buildClienteInfo ya distingue DNI/RUC automáticamente.
-  // Solo cambia el InvoiceTypeCode (03) respecto a la factura.
   const xml = buildXmlFactura(f, items)
   return xml
     .replace('>01</cbc:InvoiceTypeCode>', '>03</cbc:InvoiceTypeCode>')
 }
 
 // ── NOTA DE CRÉDITO (tipo 07) ─────────────────────────────────────
+// FIX: ahora incluye Signature, AccountingSupplierParty y
+// AccountingCustomerParty que SUNAT requiere obligatoriamente.
 export const buildXmlNotaCredito = (f, items) => {
   const serie  = f.serie
   const numero = pad(f.numero)
@@ -300,11 +328,13 @@ export const buildXmlNotaCredito = (f, items) => {
   <cbc:ID>${serie}-${numero}</cbc:ID>
   <cbc:IssueDate>${f.fecha_emision}</cbc:IssueDate>
   <cbc:DocumentCurrencyCode>PEN</cbc:DocumentCurrencyCode>
+
   <cbc:DiscrepancyResponse>
     <cbc:ReferenceID>${f.doc_ref_serie}-${pad(f.doc_ref_numero)}</cbc:ReferenceID>
-    <cbc:ResponseCode listAgencyName="PE:SUNAT">01</cbc:ResponseCode>
+    <cbc:ResponseCode listAgencyName="PE:SUNAT">${f.motivo_nc_codigo || '01'}</cbc:ResponseCode>
     <cbc:Description><![CDATA[${f.motivo_nc || 'Anulación de operación'}]]></cbc:Description>
   </cbc:DiscrepancyResponse>
+
   <cac:BillingReference>
     <cac:InvoiceDocumentReference>
       <cbc:ID>${f.doc_ref_serie}-${pad(f.doc_ref_numero)}</cbc:ID>
@@ -312,9 +342,18 @@ export const buildXmlNotaCredito = (f, items) => {
     </cac:InvoiceDocumentReference>
   </cac:BillingReference>
 
+  ${buildSignature(f)}
+
+  ${buildEmisorInfo(f)}
+
+  ${buildClienteInfo(f)}
+
   ${buildTaxTotal(f)}
 
   <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="PEN">${Number(f.subtotal).toFixed(2)}</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="PEN">${Number(f.subtotal).toFixed(2)}</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="PEN">${Number(f.total).toFixed(2)}</cbc:TaxInclusiveAmount>
     <cbc:PayableAmount currencyID="PEN">${Number(f.total).toFixed(2)}</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>
 
