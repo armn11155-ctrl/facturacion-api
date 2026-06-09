@@ -10,6 +10,8 @@ import * as cliCtrl  from '../controllers/clientes.js'
 import { analizarImagen } from '../controllers/ocr.js'
 import { eliminarImagen }    from '../controllers/cloudinary.js'
 import { getFirebaseUsage }  from '../controllers/firebaseUsage.js'
+import { enviarResumenDiarioCron } from '../jobs/crons.js'
+import { enviarResumenDiario }     from '../services/sunat.js'
 
 const router = Router()
 
@@ -29,17 +31,48 @@ router.post('/ocr', ocrLimit, authApiKey, analizarImagen)
 // ── CLOUDINARY — Eliminación segura de imágenes ───────────────────
 router.post('/cloudinary/delete', authApiKey, eliminarImagen)
 
-// ── FIREBASE USAGE — Almacenamiento real vía Cloud Monitoring ─────
+// ── FIREBASE USAGE ────────────────────────────────────────────────
 router.get('/firebase/usage', authApiKey, getFirebaseUsage)
 
 // ── FACTURAS ──────────────────────────────────────────────────────
 router.get ('/facturas',             auth,    factCtrl.listar)
 router.get ('/facturas/:id',         auth,    factCtrl.obtener)
-router.get ('/facturas/:id/pdf',     auth,    factCtrl.descargarPdf)
+router.get ('/facturas/:id/pdf',     auth,    factCtrl.descargarPdf)   // ?formato=a4|ticket
 router.post('/facturas',             authJWT, factCtrl.crear)
 router.post('/facturas/:id/emitir',  authJWT, factCtrl.emitir)
 router.post('/facturas/:id/cobrar',  authJWT, factCtrl.cobrar)
 router.post('/facturas/:id/anular',  authJWT, factCtrl.anular)
+
+// ── RESUMEN DIARIO DE BOLETAS (RC) ───────────────────────────────
+// POST /api/resumen-diario          → Disparo manual del RC del día anterior
+// POST /api/resumen-diario/:fecha   → RC para una fecha específica (YYYY-MM-DD)
+// GET  /api/resumen-diario/historial → Lista los RC enviados
+router.post('/resumen-diario', authJWT, soloAdmin, async (req, res) => {
+  try {
+    const fecha = req.body.fecha || (() => {
+      const d = new Date(); d.setDate(d.getDate() - 1);
+      return d.toISOString().split('T')[0];
+    })()
+    const result = await enviarResumenDiario(fecha)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(422).json({ ok: false, error: err.message })
+  }
+})
+
+router.get('/resumen-diario/historial', auth, async (req, res) => {
+  try {
+    const db   = getDb()
+    const snap = await db.collection('resumenes_diarios')
+      .orderBy('createdAt', 'desc')
+      .limit(30)
+      .get()
+    const historial = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    res.json({ ok: true, data: historial })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 
 // ── CLIENTES ──────────────────────────────────────────────────────
 router.get   ('/clientes',        auth,    cliCtrl.listar)
@@ -62,103 +95,24 @@ router.get('/vista360/facturas', authApiKey, async (req, res) => {
     const rows = snap.docs.map(d => {
       const f = d.data()
       return {
-        id:                d.id,
-        numero_fmt:        f.numero_fmt,
-        tipo_doc:          f.tipo_doc,
-        estado:            f.estado,
-        sunat_estado:      f.sunat_estado || null,
-        total:             f.total,
-        moneda:            f.moneda,
-        fecha_emision:     f.fecha_emision,
-        fecha_vencimiento: f.fecha_vencimiento || null,
-        pdf_url:           f.pdf_url || null,
-        xml_url:           f.xml_url || null,
-        cdr_url:           f.cdr_url || null,
-        hash:              f.hash    || null,
-        pagado:            f.pagado  || false,
-        fecha_pago:        f.fecha_pago || null,
-        cliente_nombre:    f.cliente_nombre,
-        panel_nombre:      f.panel_nombre || null,
+        id:              d.id,
+        numero_fmt:      f.numero_fmt,
+        tipo_doc:        f.tipo_doc,
+        estado:          f.estado,
+        fecha_emision:   f.fecha_emision,
+        cliente_nombre:  f.cliente_nombre,
+        total:           f.total,
+        cdr_url:         f.cdr_url  || null,
+        ra_id:           f.ra_id    || null,
+        ra_estado:       f.ra_estado || null,
+        rc_id:           f.rc_id    || null,
+        rc_declarada:    f.rc_declarada || false,
       }
     })
     res.json({ ok: true, data: rows })
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
-})
-
-// ── REPORTES ──────────────────────────────────────────────────────
-router.get('/reportes/resumen', auth, async (req, res) => {
-  try {
-    const anio = parseInt(req.query.anio || new Date().getFullYear())
-    const db   = getDb()
-
-    const snap = await db.collection('facturas')
-      .where('deleted', '==', false)
-      .where('fecha_emision', '>=', `${anio}-01-01`)
-      .where('fecha_emision', '<=', `${anio}-12-31`)
-      .get()
-
-    const MESES_ES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
-    const facturas = snap.docs.map(d => d.data())
-
-    const porMes = new Map()
-    for (const f of facturas) {
-      if (['Anulada','Rechazada'].includes(f.estado)) continue
-      const mes = (f.fecha_emision || '').slice(0, 7)
-      if (!mes) continue
-      if (!porMes.has(mes)) {
-        const mesNum = parseInt(mes.slice(5, 7))
-        porMes.set(mes, {
-          mes,
-          mes_label:     MESES_ES[mesNum - 1] || mes,
-          comprobantes:  0,
-          facturado:     0,
-          cobrado:       0,
-          pendiente:     0,
-          vencido:       0,
-        })
-      }
-      const r = porMes.get(mes)
-      r.comprobantes += 1
-      r.facturado    += Number(f.total || 0)
-      if (['Cobrada','Pagada'].includes(f.estado))                  r.cobrado   += Number(f.total || 0)
-      if (['Emitida','Aceptada','Pendiente'].includes(f.estado))    r.pendiente += Number(f.total || 0)
-      if (f.estado === 'Vencida')                                   r.vencido   += Number(f.total || 0)
-    }
-    const mensual = [...porMes.values()].sort((a, b) => a.mes.localeCompare(b.mes))
-
-    const porCli = new Map()
-    for (const f of facturas) {
-      if (['Anulada','Rechazada'].includes(f.estado)) continue
-      const k = `${f.cliente_doc}|${f.cliente_nombre}`
-      if (!porCli.has(k)) {
-        porCli.set(k, {
-          cliente_nombre: f.cliente_nombre,
-          cliente_doc:    f.cliente_doc,
-          comprobantes:   0,
-          total_facturado: 0,
-          total_cobrado:   0,
-        })
-      }
-      const r = porCli.get(k)
-      r.comprobantes    += 1
-      r.total_facturado += Number(f.total || 0)
-      if (['Cobrada','Pagada'].includes(f.estado)) r.total_cobrado += Number(f.total || 0)
-    }
-    const topClientes = [...porCli.values()]
-      .sort((a, b) => b.total_facturado - a.total_facturado)
-      .slice(0, 10)
-
-    res.json({ ok: true, data: { mensual, topClientes } })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message })
-  }
-})
-
-// ── HEALTH CHECK ──────────────────────────────────────────────────
-router.get('/health', (req, res) => {
-  res.json({ ok: true, sistema: '8 Millas — Facturación Electrónica', version: '2.0.0', timestamp: new Date() })
 })
 
 export default router
