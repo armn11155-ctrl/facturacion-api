@@ -5,6 +5,7 @@ import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import routes from "./routes/index.js";
+import { iniciarCrons } from "./jobs/crons.js";
 
 dotenv.config();
 
@@ -38,4 +39,11 @@ app.listen(PORT, () => {
   console.log(`\n🚀 Servidor corriendo en http://localhost:${PORT}`);
   console.log(`🔥 Conectando a Firebase Firestore...`);
   console.log(`🌍 Entorno: ${process.env.NODE_ENV || "development"}\n`);
+
+  // Iniciar jobs programados (solo en producción o si ENABLE_CRONS=true)
+  if (process.env.NODE_ENV === "production" || process.env.ENABLE_CRONS === "true") {
+    iniciarCrons();
+  } else {
+    console.log("ℹ️  Crons desactivados en desarrollo. Para activar: ENABLE_CRONS=true");
+  }
 });
