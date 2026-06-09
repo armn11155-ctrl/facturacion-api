@@ -95,16 +95,57 @@ export function buildHtmlFactura(f, qrDataUrl) {
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    .page { width: 210mm; min-height: 297mm; padding: 12mm 14mm 10mm; position: relative; }
 
+    /* ── FIX FOOTER: flexbox column con altura fija 297mm.
+       El .content-area crece para llenar el espacio y empuja
+       el footer exactamente al borde inferior sin espacio en blanco. */
+    .page {
+      width: 210mm;
+      height: 297mm;
+      padding: 0;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── FIX HEADER: el header se extiende borde a borde (sin padding lateral).
+       El padding lateral solo aplica al contenido interior. */
+    .header-wrap {
+      padding: 12mm 14mm 0 14mm;
+    }
+    .content-wrap {
+      padding: 0 14mm;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .content-spacer { flex: 1; }
+
+    /* ── FIX HEADER DERECHO: la caja azul llega hasta el borde del padding.
+       Se elimina cualquier margen extra a la derecha. */
     .header {
-      display: flex; justify-content: space-between; align-items: flex-start;
-      padding-bottom: 14px; border-bottom: 2px solid #e5e7eb; margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding-bottom: 14px;
+      border-bottom: 2px solid #e5e7eb;
+      margin-bottom: 16px;
+      width: 100%;
     }
     .company-name { font-size: 22px; font-weight: 800; color: #111827; letter-spacing: -0.5px; line-height: 1; }
     .company-name span { color: #f59e0b; }
     .company-meta { margin-top: 6px; color: #6b7280; font-size: 9.5px; line-height: 1.7; }
-    .doc-box { border: 2px solid #1d4ed8; border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 180px; }
+    .doc-box {
+      border: 2px solid #1d4ed8;
+      border-radius: 8px;
+      padding: 12px 18px;
+      text-align: center;
+      min-width: 180px;
+      /* quitar margin-right para que quede pegado al borde derecho del padding */
+      margin-right: 0;
+      flex-shrink: 0;
+    }
     .doc-tipo { font-size: 9px; font-weight: 700; letter-spacing: .8px; color: #1d4ed8; text-transform: uppercase; }
     .doc-ruc { font-size: 10px; font-weight: 600; color: #374151; margin: 4px 0 2px; }
     .doc-numero { font-size: 18px; font-weight: 800; color: #111827; letter-spacing: -0.5px; }
@@ -120,13 +161,12 @@ export function buildHtmlFactura(f, qrDataUrl) {
     .meta-title { font-size: 8.5px; font-weight: 700; letter-spacing: .6px; color: #6b7280; text-transform: uppercase; margin-bottom: 6px; }
     .meta-table td { padding: 3px 0; }
 
-    .items-section { margin-bottom: 20px; }
+    .items-section { margin-bottom: 16px; }
     .items-table { width: 100%; border-collapse: collapse; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
     .items-table thead { background: #1d4ed8; }
     .items-table thead th { padding: 9px 10px; text-align: left; font-size: 8.5px; font-weight: 700; color: #fff; letter-spacing: .4px; text-transform: uppercase; }
     .items-table thead th:nth-child(n+4) { text-align: right; }
 
-    /* ── FOOTER: QR grande + Totales ── */
     .footer-area {
       display: flex;
       gap: 20px;
@@ -135,8 +175,6 @@ export function buildHtmlFactura(f, qrDataUrl) {
       padding-top: 16px;
       border-top: 1px solid #e5e7eb;
     }
-
-    /* QR más grande y bien ubicado */
     .qr-block {
       display: flex;
       flex-direction: column;
@@ -180,14 +218,21 @@ export function buildHtmlFactura(f, qrDataUrl) {
       border-radius: 6px; margin-bottom: 12px;
     }
     .watermark {
-      position: fixed; top: 50%; left: 50%;
+      position: absolute; top: 50%; left: 50%;
       transform: translate(-50%, -50%) rotate(-35deg);
       font-size: 90px; font-weight: 900; color: rgba(239,68,68,0.08);
       letter-spacing: 8px; pointer-events: none; z-index: 0; white-space: nowrap;
     }
+
+    /* ── FIX FOOTER: pegado al borde inferior sin espacio en blanco.
+       El padding bottom de 10mm va aquí, no en .page. */
     .page-footer {
-      margin-top: 16px; padding-top: 10px; border-top: 1px solid #e5e7eb;
-      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 14mm 10mm 14mm;
+      border-top: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
     }
     .page-footer-text { font-size: 8px; color: #9ca3af; }
   </style>
@@ -197,151 +242,157 @@ export function buildHtmlFactura(f, qrDataUrl) {
 
   ${['Anulada', 'Rechazada'].includes(f.estado) ? `<div class="watermark">${f.estado.toUpperCase()}</div>` : ''}
 
-  <!-- HEADER -->
-  <div class="header">
-    <div class="logo-area">
-      <div class="company-name">8<span>Millas</span></div>
-      <div class="company-meta">
-        ${process.env.EMISOR_RAZON_SOCIAL || f.emisor_razon || '—'}<br>
-        RUC: ${f.emisor_ruc}<br>
-        ${process.env.EMISOR_DIRECCION || ''} ${process.env.EMISOR_CIUDAD ? '· ' + process.env.EMISOR_CIUDAD : ''}
+  <!-- HEADER: con padding lateral propio para que la caja azul llegue al borde -->
+  <div class="header-wrap">
+    <div class="header">
+      <div class="logo-area">
+        <div class="company-name">8<span>Millas</span></div>
+        <div class="company-meta">
+          ${process.env.EMISOR_RAZON_SOCIAL || f.emisor_razon || '—'}<br>
+          RUC: ${f.emisor_ruc}<br>
+          ${process.env.EMISOR_DIRECCION || ''} ${process.env.EMISOR_CIUDAD ? '· ' + process.env.EMISOR_CIUDAD : ''}
+        </div>
       </div>
-    </div>
-    <div class="doc-box">
-      <div class="doc-tipo">${tipoLabel}</div>
-      <div class="doc-ruc">RUC: ${f.emisor_ruc}</div>
-      <div class="doc-numero">${numeroFmt}</div>
-    </div>
-  </div>
-
-  <!-- ESTADO -->
-  <div class="estado-bar">
-    <span style="font-size:9.5px;color:#6b7280">
-      Estado:&nbsp;&nbsp;${estadoBadge(f.estado)}
-    </span>
-    ${f.sunat_estado ? `<span style="font-size:9px;color:#6b7280">SUNAT: <strong>${f.sunat_estado}</strong></span>` : ''}
-    ${f.hash ? `<span style="font-size:8px;color:#9ca3af;font-family:monospace">Hash: ${String(f.hash).substring(0, 20)}…</span>` : ''}
-  </div>
-
-  <!-- PARTES -->
-  <div class="parties">
-    <div class="party-block">
-      <div class="party-title">Emisor</div>
-      <div class="party-name">${f.emisor_razon || process.env.EMISOR_RAZON_SOCIAL}</div>
-      <div class="party-detail">
-        RUC: ${f.emisor_ruc}<br>
-        ${process.env.EMISOR_DIRECCION || ''}<br>
-        ${process.env.EMISOR_CIUDAD || ''}
-      </div>
-    </div>
-    <div class="party-block">
-      <div class="party-title">Cliente / Receptor</div>
-      <div class="party-name">${f.cliente_nombre}</div>
-      <div class="party-detail">
-        ${f.cliente_tipo_doc || 'RUC'}: ${f.cliente_doc}<br>
-        ${f.cliente_direccion ? f.cliente_direccion + '<br>' : ''}
-        ${f.cliente_email || ''}
+      <div class="doc-box">
+        <div class="doc-tipo">${tipoLabel}</div>
+        <div class="doc-ruc">RUC: ${f.emisor_ruc}</div>
+        <div class="doc-numero">${numeroFmt}</div>
       </div>
     </div>
   </div>
 
-  <!-- DATOS -->
-  <div class="meta-section">
-    <div class="meta-block">
-      <div class="meta-title">Datos del comprobante</div>
-      <table class="meta-table">
-        <tr>
-          <td style="width:130px;color:#6b7280;font-size:9.5px">Fecha de emisión:</td>
-          <td style="font-size:9.5px;font-weight:600">${f.fecha_emision}</td>
-        </tr>
-        ${vctoHtml}
-        <tr>
-          <td style="color:#6b7280;font-size:9.5px">Moneda:</td>
-          <td style="font-size:9.5px;font-weight:600">SOLES (PEN)</td>
-        </tr>
-        <tr>
-          <td style="color:#6b7280;font-size:9.5px">Tipo operación:</td>
-          <td style="font-size:9.5px;font-weight:600">${f.es_exonerado ? 'Exonerada' : 'Gravada (IGV 18%)'}</td>
-        </tr>
+  <!-- CONTENIDO PRINCIPAL -->
+  <div class="content-wrap">
+
+    <!-- ESTADO -->
+    <div class="estado-bar">
+      <span style="font-size:9.5px;color:#6b7280">
+        Estado:&nbsp;&nbsp;${estadoBadge(f.estado)}
+      </span>
+      ${f.sunat_estado ? `<span style="font-size:9px;color:#6b7280">SUNAT: <strong>${f.sunat_estado}</strong></span>` : ''}
+      ${f.hash ? `<span style="font-size:8px;color:#9ca3af;font-family:monospace">Hash: ${String(f.hash).substring(0, 20)}…</span>` : ''}
+    </div>
+
+    <!-- PARTES -->
+    <div class="parties">
+      <div class="party-block">
+        <div class="party-title">Emisor</div>
+        <div class="party-name">${f.emisor_razon || process.env.EMISOR_RAZON_SOCIAL}</div>
+        <div class="party-detail">
+          RUC: ${f.emisor_ruc}<br>
+          ${process.env.EMISOR_DIRECCION || ''}<br>
+          ${process.env.EMISOR_CIUDAD || ''}
+        </div>
+      </div>
+      <div class="party-block">
+        <div class="party-title">Cliente / Receptor</div>
+        <div class="party-name">${f.cliente_nombre}</div>
+        <div class="party-detail">
+          ${f.cliente_tipo_doc || 'RUC'}: ${f.cliente_doc}<br>
+          ${f.cliente_direccion ? f.cliente_direccion + '<br>' : ''}
+          ${f.cliente_email || ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- DATOS -->
+    <div class="meta-section">
+      <div class="meta-block">
+        <div class="meta-title">Datos del comprobante</div>
+        <table class="meta-table">
+          <tr>
+            <td style="width:130px;color:#6b7280;font-size:9.5px">Fecha de emisión:</td>
+            <td style="font-size:9.5px;font-weight:600">${f.fecha_emision}</td>
+          </tr>
+          ${vctoHtml}
+          <tr>
+            <td style="color:#6b7280;font-size:9.5px">Moneda:</td>
+            <td style="font-size:9.5px;font-weight:600">SOLES (PEN)</td>
+          </tr>
+          <tr>
+            <td style="color:#6b7280;font-size:9.5px">Tipo operación:</td>
+            <td style="font-size:9.5px;font-weight:600">${f.es_exonerado ? 'Exonerada' : 'Gravada (IGV 18%)'}</td>
+          </tr>
+        </table>
+      </div>
+      ${f.panel_nombre || f.concepto || f.periodo_inicio ? `
+      <div class="meta-block">
+        <div class="meta-title">Detalle de servicio</div>
+        <table class="meta-table">
+          ${panelHtml}
+          ${periodoHtml}
+          ${conceptoHtml}
+        </table>
+      </div>` : ''}
+    </div>
+
+    <!-- ITEMS -->
+    <div class="items-section">
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th style="width:60px">Código</th>
+            <th>Descripción</th>
+            <th style="width:50px;text-align:center">U.M.</th>
+            <th style="width:55px;text-align:right">Cant.</th>
+            <th style="width:75px;text-align:right">P. Unit.</th>
+            <th style="width:65px;text-align:right">IGV</th>
+            <th style="width:80px;text-align:right">Total</th>
+          </tr>
+        </thead>
+        <tbody>${itemsHtml}</tbody>
       </table>
     </div>
-    ${f.panel_nombre || f.concepto || f.periodo_inicio ? `
-    <div class="meta-block">
-      <div class="meta-title">Detalle de servicio</div>
-      <table class="meta-table">
-        ${panelHtml}
-        ${periodoHtml}
-        ${conceptoHtml}
-      </table>
-    </div>` : ''}
-  </div>
 
-  <!-- ITEMS -->
-  <div class="items-section">
-    <table class="items-table">
-      <thead>
-        <tr>
-          <th style="width:60px">Código</th>
-          <th>Descripción</th>
-          <th style="width:50px;text-align:center">U.M.</th>
-          <th style="width:55px;text-align:right">Cant.</th>
-          <th style="width:75px;text-align:right">P. Unit.</th>
-          <th style="width:65px;text-align:right">IGV</th>
-          <th style="width:80px;text-align:right">Total</th>
-        </tr>
-      </thead>
-      <tbody>${itemsHtml}</tbody>
-    </table>
-  </div>
+    <!-- QR + TOTALES: spacer empuja esto hacia el footer si hay poco contenido -->
+    <div class="content-spacer"></div>
 
-  <!-- FOOTER: QR + TOTALES -->
-  <div class="footer-area">
-
-    <!-- QR SUNAT — 160×160px, legible con cualquier escáner -->
-    <div class="qr-block">
-      <img src="${qrDataUrl}" alt="Código QR SUNAT" />
-      <div class="qr-label">
-        Representación impresa de<br>comprobante electrónico.<br>
-        Consulte en <strong>sunat.gob.pe</strong>
+    <!-- FOOTER: QR + TOTALES -->
+    <div class="footer-area">
+      <div class="qr-block">
+        <img src="${qrDataUrl}" alt="Código QR SUNAT" />
+        <div class="qr-label">
+          Representación impresa de<br>comprobante electrónico.<br>
+          Consulte en <strong>sunat.gob.pe</strong>
+        </div>
+      </div>
+      <div class="totales-block">
+        <div class="letras-box">${montoEnLetras(f.total)}</div>
+        <table class="totales-table">
+          ${!f.es_exonerado ? `
+          <tr>
+            <td style="color:#6b7280">Op. Gravada:</td>
+            <td>S/ ${fmt(f.op_gravada || f.subtotal)}</td>
+          </tr>` : `
+          <tr>
+            <td style="color:#6b7280">Op. Exonerada:</td>
+            <td>S/ ${fmt(f.op_exonerada || f.subtotal)}</td>
+          </tr>`}
+          <tr>
+            <td style="color:#6b7280">IGV (18%):</td>
+            <td>S/ ${fmt(f.igv)}</td>
+          </tr>
+          ${f.descuento > 0 ? `
+          <tr>
+            <td style="color:#ef4444">Descuento:</td>
+            <td style="color:#ef4444">- S/ ${fmt(f.descuento)}</td>
+          </tr>` : ''}
+          <tr>
+            <td colspan="2" style="padding:0">
+              <hr style="border:none;border-top:1px solid #e5e7eb;margin:6px 0">
+            </td>
+          </tr>
+          <tr class="total-row">
+            <td>TOTAL A PAGAR</td>
+            <td>S/ ${fmt(f.total)}</td>
+          </tr>
+        </table>
       </div>
     </div>
 
-    <!-- TOTALES -->
-    <div class="totales-block">
-      <div class="letras-box">${montoEnLetras(f.total)}</div>
-      <table class="totales-table">
-        ${!f.es_exonerado ? `
-        <tr>
-          <td style="color:#6b7280">Op. Gravada:</td>
-          <td>S/ ${fmt(f.op_gravada || f.subtotal)}</td>
-        </tr>` : `
-        <tr>
-          <td style="color:#6b7280">Op. Exonerada:</td>
-          <td>S/ ${fmt(f.op_exonerada || f.subtotal)}</td>
-        </tr>`}
-        <tr>
-          <td style="color:#6b7280">IGV (18%):</td>
-          <td>S/ ${fmt(f.igv)}</td>
-        </tr>
-        ${f.descuento > 0 ? `
-        <tr>
-          <td style="color:#ef4444">Descuento:</td>
-          <td style="color:#ef4444">- S/ ${fmt(f.descuento)}</td>
-        </tr>` : ''}
-        <tr>
-          <td colspan="2" style="padding:0">
-            <hr style="border:none;border-top:1px solid #e5e7eb;margin:6px 0">
-          </td>
-        </tr>
-        <tr class="total-row">
-          <td>TOTAL A PAGAR</td>
-          <td>S/ ${fmt(f.total)}</td>
-        </tr>
-      </table>
-    </div>
-  </div>
+  </div><!-- .content-wrap -->
 
-  <!-- PIE DE PÁGINA -->
+  <!-- PIE DE PÁGINA: fijo al fondo gracias al flexbox de .page -->
   <div class="page-footer">
     <div class="page-footer-text">
       Comprobante emitido electrónicamente · R.S. 097-2012/SUNAT · ${f.emisor_ruc}
