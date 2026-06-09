@@ -9,43 +9,39 @@ import QRCode    from 'qrcode'
 import { buildHtmlFactura } from '../templates/factura.html.js'
 
 // ── Cadena QR exigida por SUNAT ───────────────────────────────────
-// Formato URL oficial SUNAT:
-// https://factura.sunat.gob.pe/validarComprobante
-//   #RUC|TIPO|SERIE|NUMERO|IGV|TOTAL|FECHA|TIPO_DOC_CLI|NRO_DOC_CLI
-//
-// Al escanear abre directamente el portal de validación de SUNAT.
-// Antes generábamos solo la cadena de datos (sin URL) y los teléfonos
-// la interpretaban como número de teléfono por los 11 dígitos del RUC.
+// Formato oficial: RUC|TIPO|SERIE|NUMERO|IGV|TOTAL|FECHA|TIPO_DOC_CLI|NRO_DOC_CLI
+// Se envuelve en la URL del portal SUNAT para que al escanear abra
+// directamente la validación en el navegador.
+// Importante: todos los campos deben ser strings limpios sin NaN ni undefined,
+// porque eso es lo que aparece cuando se escanea — los "números raros".
 function buildCadenaQR(factura) {
   const tipoDocCliente =
     factura.cliente_tipo_doc === 'DNI' ? '1' :
-    factura.cliente_tipo_doc === 'RUC' ? '6' :
     factura.cliente_tipo_doc === 'CE'  ? '4' :
     factura.cliente_tipo_doc === 'PAS' ? '7' : '6'
 
-  const datos = [
-    factura.emisor_ruc,
-    factura.tipo_doc,
-    factura.serie,
-    String(factura.numero).padStart(8, '0'),
-    Number(factura.igv).toFixed(2),
-    Number(factura.total).toFixed(2),
-    factura.fecha_emision,
-    tipoDocCliente,
-    factura.cliente_doc,
-  ].join('|')
+  // Valores defensivos: si algo es undefined/null/NaN → string vacío o '0.00'
+  const ruc      = String(factura.emisor_ruc    || '')
+  const tipo     = String(factura.tipo_doc      || '01')
+  const serie    = String(factura.serie         || '')
+  const numero   = String(factura.numero        || '0').padStart(8, '0')
+  const igv      = isNaN(Number(factura.igv))   ? '0.00' : Number(factura.igv).toFixed(2)
+  const total    = isNaN(Number(factura.total))  ? '0.00' : Number(factura.total).toFixed(2)
+  const fecha    = String(factura.fecha_emision  || '')
+  const docCli   = String(factura.cliente_doc    || '')
 
-  // URL oficial del portal de validación de SUNAT
-  // Al escanear → abre el navegador → valida el comprobante en línea
+  const datos = [ruc, tipo, serie, numero, igv, total, fecha, tipoDocCliente, docCli].join('|')
+
+  // URL del portal de validación de SUNAT — al escanear abre el navegador
+  // El fragmento (#) es procesado por el SPA de SUNAT para buscar el comprobante
   const urlQR = `https://factura.sunat.gob.pe/validarComprobante#${datos}`
 
-  console.log('🔲 QR URL SUNAT:', urlQR)
+  console.log('🔲 QR SUNAT:', urlQR)
   return urlQR
 }
 
 async function generarQRDataUrl(factura) {
   const cadena = buildCadenaQR(factura)
-  // 350px para que el escáner lo lea sin problemas
   const dataUrl = await QRCode.toDataURL(cadena, {
     errorCorrectionLevel: 'M',
     width: 350,
