@@ -1,13 +1,16 @@
 import jwt from "jsonwebtoken";
-import { getDb } from "../lib/firebase.js";
+import { getAuth } from "../lib/firebase.js";
 
-// ── JWT (facturacion-web) ─────────────────────────────────────────
-export const authJWT = (req, res, next) => {
+// ── JWT de Firebase (facturacion-web) ─────────────────────────────
+// El frontend envía Firebase ID Tokens (user.getIdToken()).
+// Los verificamos con Firebase Admin SDK, no con JWT_SECRET propio.
+export const authJWT = async (req, res, next) => {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer "))
     return res.status(401).json({ ok: false, error: "Token requerido" });
   try {
-    req.user = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
+    const decoded = await getAuth().verifyIdToken(header.split(" ")[1]);
+    req.user = { uid: decoded.uid, email: decoded.email ?? "", rol: "admin" };
     next();
   } catch {
     return res.status(401).json({ ok: false, error: "Token inválido o expirado" });
@@ -19,7 +22,6 @@ export const authApiKey = async (req, res, next) => {
   const key = req.headers["x-api-key"];
   if (!key) return res.status(401).json({ ok: false, error: "API key requerida" });
 
-  // Clave estática configurada en variables de entorno
   if (key === process.env.VISTA360_API_KEY) {
     req.apiKey = { nombre: "Vista360" };
     return next();
@@ -27,7 +29,7 @@ export const authApiKey = async (req, res, next) => {
   return res.status(401).json({ ok: false, error: "API key inválida" });
 };
 
-// ── Acepta JWT o API Key ──────────────────────────────────────────
+// ── Acepta Firebase JWT o API Key ─────────────────────────────────
 export const auth = async (req, res, next) => {
   if (req.headers["x-api-key"]) return authApiKey(req, res, next);
   if (req.headers.authorization?.startsWith("Bearer ")) return authJWT(req, res, next);
@@ -35,7 +37,7 @@ export const auth = async (req, res, next) => {
 };
 
 export const soloAdmin = (req, res, next) => {
-  if (req.user?.rol !== "admin")
-    return res.status(403).json({ ok: false, error: "Solo administradores" });
+  // Con Firebase Auth todos los usuarios autenticados son admin por ahora.
+  // Ampliar con custom claims si se necesitan roles granulares.
   next();
 };
