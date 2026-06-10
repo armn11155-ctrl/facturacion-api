@@ -15,6 +15,9 @@ import { enviarResumenDiario }     from '../services/sunat.js'
 
 const router = Router()
 
+// ── HEALTH CHECK (warmup para Render free tier) ───────────────────
+router.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }))
+
 // ── AUTH ──────────────────────────────────────────────────────────
 router.post('/auth/login',          authCtrl.login)
 router.get ('/auth/me',             authJWT, authCtrl.me)
@@ -116,3 +119,4 @@ router.get('/vista360/facturas', authApiKey, async (req, res) => {
 })
 
 export default router
+
