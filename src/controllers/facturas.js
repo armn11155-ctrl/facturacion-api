@@ -175,13 +175,18 @@ export const emitir = async (req, res) => {
     try {
       const result = await enviarASunat(req.params.id, factura, factura.items || []);
 
-      // Responder al frontend de inmediato
-      res.json({ ok: true, mensaje: result.mensaje, data: { id: factura.id, estado: "Emitida", cdr_url: result.cdrUrl } });
+      // Enviar correos y esperar resultado
+      const emailResult = await enviarCorreoFactura(factura).catch((err) => {
+        console.error("[email] Error inesperado:", err.message);
+        return { adminOk: false, clienteOk: false, clienteError: err.message };
+      });
 
-      // Enviar correos en background (no bloquea la respuesta)
-      enviarCorreoFactura(factura).catch((emailErr) =>
-        console.error("[email] Error post-emision:", emailErr.message)
-      );
+      res.json({
+        ok: true,
+        mensaje: result.mensaje,
+        data: { id: factura.id, estado: "Emitida", cdr_url: result.cdrUrl },
+        email: emailResult,
+      });
     } catch (sunatErr) {
       await docRef.update({ estado: "Borrador", sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT", updatedAt: FieldValue.serverTimestamp() });
       throw sunatErr;
@@ -209,11 +214,6 @@ export const cobrar = async (req, res) => {
 };
 
 // ── POST /api/facturas/:id/anular ─────────────────────────────────
-// Lógica:
-//   - Borrador/Pendiente → anulación local (sin RA, sin enviar a SUNAT)
-//   - Emitida/Aceptada + tipo 01/07/08 → envía RA (Comunicación de Baja)
-//   - Emitida/Aceptada + tipo 03 → anulación local + marcada para próximo RC
-//   - Anulada → idempotente
 export const anular = async (req, res) => {
   try {
     const db = getDb();
@@ -225,12 +225,10 @@ export const anular = async (req, res) => {
 
     const factura = { id: doc.id, ...doc.data() };
 
-    // Idempotente
     if (factura.estado === "Anulada") {
       return res.json({ ok: true, mensaje: "La factura ya está anulada", idempotente: true });
     }
 
-    // Solo borradores y pendientes → anulación local sin RA
     if (["Borrador","Pendiente"].includes(factura.estado)) {
       await docRef.update({
         estado: "Anulada",
@@ -240,14 +238,12 @@ export const anular = async (req, res) => {
       return res.json({ ok: true, mensaje: "Factura anulada localmente (no había sido enviada a SUNAT)" });
     }
 
-    // Facturas ya enviadas a SUNAT
     if (["Emitida","Aceptada","Vencida"].includes(factura.estado)) {
-      // Boletas → anulación local, se declarará en el próximo RC con instrucción 03
       if (factura.tipo_doc === "03") {
         await docRef.update({
           estado: "Anulada",
           sunat_mensaje: motivo || "Anulado — se declarará en próximo Resumen Diario (RC)",
-          rc_pendiente_anulacion: true,   // flag para el cron de RC
+          rc_pendiente_anulacion: true,
           updatedAt: FieldValue.serverTimestamp(),
         });
         return res.json({
@@ -256,7 +252,6 @@ export const anular = async (req, res) => {
         });
       }
 
-      // Facturas/NC/ND → enviar RA (Comunicación de Baja)
       try {
         const result = await enviarComunicacionBaja(req.params.id, factura, motivo);
         return res.json({
@@ -265,7 +260,6 @@ export const anular = async (req, res) => {
           ra_id: result.raId,
         });
       } catch (raErr) {
-        // RA rechazado → marcar error pero retornar detalles
         return res.status(422).json({
           ok: false,
           error: raErr.message,
@@ -274,7 +268,6 @@ export const anular = async (req, res) => {
       }
     }
 
-    // Estados no anulables
     return res.status(400).json({ ok: false, error: `No se puede anular una factura en estado "${factura.estado}"` });
 
   } catch (err) {
@@ -283,8 +276,6 @@ export const anular = async (req, res) => {
 };
 
 // ── GET /api/facturas/:id/pdf?formato=ticket|a4 ───────────────────
-// ?formato=ticket → PDF 80mm (impresora térmica)
-// ?formato=a4     → PDF A4 estándar (default)
 export const descargarPdf = async (req, res) => {
   try {
     const db      = getDb();
