@@ -4,6 +4,7 @@ const GMAIL_USER  = process.env.GMAIL_USER;
 const GMAIL_PASS  = process.env.GMAIL_PASS;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || GMAIL_USER;
 const EMISOR      = process.env.EMISOR_RAZON_SOCIAL || "8 Millas S.A.C.";
+const API_URL     = (process.env.API_URL || "").replace(/\/$/, "");
 
 const fmt = (n) =>
   "S/ " + Number(n || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 });
@@ -26,6 +27,11 @@ function htmlFactura(factura, esAdmin = false) {
     factura.periodo_inicio && factura.periodo_fin
       ? `<p style="margin:4px 0;color:#555">Período: <b>${factura.periodo_inicio}</b> al <b>${factura.periodo_fin}</b></p>`
       : "";
+
+  // Píxel de tracking — solo para correo al cliente (no admin)
+  const trackingPixel = !esAdmin && factura.id && API_URL
+    ? `<img src="${API_URL}/api/track/${factura.id}" width="1" height="1" style="display:block" alt="" />`
+    : "";
 
   return `
 <!DOCTYPE html>
@@ -97,11 +103,11 @@ function htmlFactura(factura, esAdmin = false) {
       <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Sistema de Facturación Electrónica</p>
     </div>
   </div>
+  ${trackingPixel}
 </body>
 </html>`;
 }
 
-// Retorna { adminOk, clienteOk, clienteError }
 export async function enviarCorreoFactura(factura) {
   if (!GMAIL_USER || !GMAIL_PASS) {
     console.warn("[email] GMAIL_USER o GMAIL_PASS no configurados — correo omitido");
@@ -118,7 +124,7 @@ export async function enviarCorreoFactura(factura) {
   let clienteOk    = false;
   let clienteError = null;
 
-  // 1️⃣ Correo al administrador (siempre)
+  // 1️⃣ Correo al administrador
   try {
     await transporter.sendMail({
       from:    `"${EMISOR}" <${GMAIL_USER}>`,
@@ -148,6 +154,6 @@ export async function enviarCorreoFactura(factura) {
       console.error("[email] ❌ Error enviando a cliente:", err.message);
     }
   }
-  // Sin email → no es error, simplemente no se envía
+
   return { adminOk, clienteOk, clienteError, sinEmail: !factura.cliente_email };
 }
