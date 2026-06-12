@@ -1,16 +1,13 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_PASS = process.env.GMAIL_PASS;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || GMAIL_USER;
+const EMISOR = process.env.EMISOR_RAZON_SOCIAL || "8 Millas S.A.C.";
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@8millas.pe";
-const FROM_EMAIL  = process.env.FROM_EMAIL  || "facturas@8millas.pe";
-const EMISOR      = process.env.EMISOR_RAZON_SOCIAL || "8 Millas S.A.C.";
-
-// Formatea moneda peruana
 const fmt = (n) =>
   "S/ " + Number(n || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 });
 
-// ── Plantilla HTML ──────────────────────────────────────────────
 function htmlFactura(factura, esAdmin = false) {
   const tipo = factura.tipo_doc === "01" ? "Factura" : "Boleta";
   const itemsHtml = (factura.items || [])
@@ -36,8 +33,6 @@ function htmlFactura(factura, esAdmin = false) {
 <head><meta charset="UTF-8"><title>${tipo} ${factura.numero_fmt}</title></head>
 <body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,sans-serif">
   <div style="max-width:600px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.08)">
-
-    <!-- Cabecera -->
     <div style="background:linear-gradient(135deg,#1D4ED8 0%,#2563EB 100%);padding:28px 32px">
       <div style="display:flex;align-items:center;gap:12px">
         <div style="width:44px;height:44px;background:rgba(255,255,255,.2);border-radius:10px;display:flex;align-items:center;justify-content:center">
@@ -49,18 +44,13 @@ function htmlFactura(factura, esAdmin = false) {
         </div>
       </div>
     </div>
-
-    <!-- Cuerpo -->
     <div style="padding:28px 32px">
-
       <p style="margin:0 0 20px;font-size:15px;color:#333">
         ${esAdmin
           ? `Se emitió la ${tipo.toLowerCase()} <b>${factura.numero_fmt}</b> para el cliente <b>${factura.cliente_nombre}</b>.`
           : `Estimado/a <b>${factura.cliente_nombre}</b>, adjuntamos el comprobante <b>${factura.numero_fmt}</b> emitido a su nombre.`
         }
       </p>
-
-      <!-- Datos principales -->
       <div style="background:#f8fafc;border-radius:8px;padding:16px 20px;margin-bottom:20px">
         <table style="width:100%;border-collapse:collapse">
           <tr>
@@ -83,8 +73,6 @@ function htmlFactura(factura, esAdmin = false) {
         </table>
         ${periodoHtml}
       </div>
-
-      <!-- Items -->
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px">
         <thead>
           <tr style="background:#f0f4ff">
@@ -96,8 +84,6 @@ function htmlFactura(factura, esAdmin = false) {
         </thead>
         <tbody>${itemsHtml}</tbody>
       </table>
-
-      <!-- Totales -->
       <div style="text-align:right;font-size:13px;color:#555;margin-bottom:8px">
         ${!factura.es_exonerado
           ? `<p style="margin:2px 0">Subtotal: ${fmt(factura.subtotal)}</p>
@@ -106,10 +92,7 @@ function htmlFactura(factura, esAdmin = false) {
         }
         <p style="margin:8px 0 0;font-size:18px;font-weight:700;color:#1D4ED8">Total: ${fmt(factura.total)}</p>
       </div>
-
     </div>
-
-    <!-- Pie -->
     <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #eee;text-align:center">
       <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Sistema de Facturación Electrónica</p>
     </div>
@@ -118,49 +101,45 @@ function htmlFactura(factura, esAdmin = false) {
 </html>`;
 }
 
-// ── Función principal exportada ─────────────────────────────────
 export async function enviarCorreoFactura(factura) {
-  if (!process.env.RESEND_API_KEY) {
-    console.warn("[email] RESEND_API_KEY no configurada — correo omitido");
+  if (!GMAIL_USER || !GMAIL_PASS) {
+    console.warn("[email] GMAIL_USER o GMAIL_PASS no configurados — correo omitido");
     return;
   }
 
   const tipo = factura.tipo_doc === "01" ? "Factura" : "Boleta";
-  const errors = [];
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+  });
 
-  // 1️⃣  Correo al administrador (siempre)
+  // 1️⃣ Correo al administrador (siempre)
   try {
-    await resend.emails.send({
-      from: `${EMISOR} <${FROM_EMAIL}>`,
-      to:   [ADMIN_EMAIL],
+    await transporter.sendMail({
+      from: `"${EMISOR}" <${GMAIL_USER}>`,
+      to: ADMIN_EMAIL,
       subject: `[Admin] ${tipo} ${factura.numero_fmt} — ${factura.cliente_nombre}`,
       html: htmlFactura(factura, true),
     });
     console.log(`[email] ✅ Admin notificado: ${factura.numero_fmt}`);
   } catch (err) {
-    errors.push(`admin: ${err.message}`);
     console.error("[email] ❌ Error enviando a admin:", err.message);
   }
 
-  // 2️⃣  Correo al cliente (solo si tiene email)
+  // 2️⃣ Correo al cliente (solo si tiene email)
   if (factura.cliente_email) {
     try {
-      await resend.emails.send({
-        from: `${EMISOR} <${FROM_EMAIL}>`,
-        to:   [factura.cliente_email],
+      await transporter.sendMail({
+        from: `"${EMISOR}" <${GMAIL_USER}>`,
+        to: factura.cliente_email,
         subject: `Tu ${tipo} ${factura.numero_fmt} — ${EMISOR}`,
         html: htmlFactura(factura, false),
       });
       console.log(`[email] ✅ Cliente notificado: ${factura.cliente_email}`);
     } catch (err) {
-      errors.push(`cliente: ${err.message}`);
       console.error("[email] ❌ Error enviando a cliente:", err.message);
     }
   } else {
     console.log("[email] ℹ️  Cliente sin email — se omite correo al cliente");
-  }
-
-  if (errors.length) {
-    console.error("[email] Errores parciales:", errors.join(" | "));
   }
 }
