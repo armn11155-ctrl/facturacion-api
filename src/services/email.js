@@ -1,9 +1,9 @@
 import nodemailer from "nodemailer";
 
-const GMAIL_USER = process.env.GMAIL_USER;
-const GMAIL_PASS = process.env.GMAIL_PASS;
+const GMAIL_USER  = process.env.GMAIL_USER;
+const GMAIL_PASS  = process.env.GMAIL_PASS;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || GMAIL_USER;
-const EMISOR = process.env.EMISOR_RAZON_SOCIAL || "8 Millas S.A.C.";
+const EMISOR      = process.env.EMISOR_RAZON_SOCIAL || "8 Millas S.A.C.";
 
 const fmt = (n) =>
   "S/ " + Number(n || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 });
@@ -48,7 +48,7 @@ function htmlFactura(factura, esAdmin = false) {
       <p style="margin:0 0 20px;font-size:15px;color:#333">
         ${esAdmin
           ? `Se emitió la ${tipo.toLowerCase()} <b>${factura.numero_fmt}</b> para el cliente <b>${factura.cliente_nombre}</b>.`
-          : `Estimado/a <b>${factura.cliente_nombre}</b>, adjuntamos el comprobante <b>${factura.numero_fmt}</b> emitido a su nombre.`
+          : `Estimado/a <b>${factura.cliente_nombre}</b>, le informamos que se ha emitido el comprobante <b>${factura.numero_fmt}</b> a su nombre.`
         }
       </p>
       <div style="background:#f8fafc;border-radius:8px;padding:16px 20px;margin-bottom:20px">
@@ -101,45 +101,53 @@ function htmlFactura(factura, esAdmin = false) {
 </html>`;
 }
 
+// Retorna { adminOk, clienteOk, clienteError }
 export async function enviarCorreoFactura(factura) {
   if (!GMAIL_USER || !GMAIL_PASS) {
     console.warn("[email] GMAIL_USER o GMAIL_PASS no configurados — correo omitido");
-    return;
+    return { adminOk: false, clienteOk: false, clienteError: "Credenciales de Gmail no configuradas" };
   }
 
-  const tipo = factura.tipo_doc === "01" ? "Factura" : "Boleta";
+  const tipo        = factura.tipo_doc === "01" ? "Factura" : "Boleta";
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: { user: GMAIL_USER, pass: GMAIL_PASS },
   });
 
+  let adminOk      = false;
+  let clienteOk    = false;
+  let clienteError = null;
+
   // 1️⃣ Correo al administrador (siempre)
   try {
     await transporter.sendMail({
-      from: `"${EMISOR}" <${GMAIL_USER}>`,
-      to: ADMIN_EMAIL,
+      from:    `"${EMISOR}" <${GMAIL_USER}>`,
+      to:      ADMIN_EMAIL,
       subject: `[Admin] ${tipo} ${factura.numero_fmt} — ${factura.cliente_nombre}`,
-      html: htmlFactura(factura, true),
+      html:    htmlFactura(factura, true),
     });
+    adminOk = true;
     console.log(`[email] ✅ Admin notificado: ${factura.numero_fmt}`);
   } catch (err) {
     console.error("[email] ❌ Error enviando a admin:", err.message);
   }
 
-  // 2️⃣ Correo al cliente (solo si tiene email)
+  // 2️⃣ Correo al cliente
   if (factura.cliente_email) {
     try {
       await transporter.sendMail({
-        from: `"${EMISOR}" <${GMAIL_USER}>`,
-        to: factura.cliente_email,
+        from:    `"${EMISOR}" <${GMAIL_USER}>`,
+        to:      factura.cliente_email,
         subject: `Tu ${tipo} ${factura.numero_fmt} — ${EMISOR}`,
-        html: htmlFactura(factura, false),
+        html:    htmlFactura(factura, false),
       });
+      clienteOk = true;
       console.log(`[email] ✅ Cliente notificado: ${factura.cliente_email}`);
     } catch (err) {
+      clienteError = err.message;
       console.error("[email] ❌ Error enviando a cliente:", err.message);
     }
-  } else {
-    console.log("[email] ℹ️  Cliente sin email — se omite correo al cliente");
   }
+  // Sin email → no es error, simplemente no se envía
+  return { adminOk, clienteOk, clienteError, sinEmail: !factura.cliente_email };
 }
