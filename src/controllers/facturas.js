@@ -1,6 +1,7 @@
 import { getDb } from "../lib/firebase.js";
 import { enviarASunat, enviarComunicacionBaja } from "../services/sunat.js";
 import { generarPdfFactura, generarPdfTicket } from "../services/pdf.js";
+import { enviarCorreoFactura } from "../services/email.js";
 import { FieldValue } from "firebase-admin/firestore";
 
 const COL = "facturas";
@@ -173,7 +174,14 @@ export const emitir = async (req, res) => {
 
     try {
       const result = await enviarASunat(req.params.id, factura, factura.items || []);
+
+      // Responder al frontend de inmediato
       res.json({ ok: true, mensaje: result.mensaje, data: { id: factura.id, estado: "Emitida", cdr_url: result.cdrUrl } });
+
+      // Enviar correos en background (no bloquea la respuesta)
+      enviarCorreoFactura(factura).catch((emailErr) =>
+        console.error("[email] Error post-emision:", emailErr.message)
+      );
     } catch (sunatErr) {
       await docRef.update({ estado: "Borrador", sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT", updatedAt: FieldValue.serverTimestamp() });
       throw sunatErr;
