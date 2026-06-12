@@ -181,6 +181,13 @@ export const emitir = async (req, res) => {
         return { adminOk: false, clienteOk: false, clienteError: err.message };
       });
 
+      // Guardar estado de envío en Firestore
+      await docRef.update({
+        enviado_cliente: emailResult.clienteOk === true,
+        leido_cliente:   false,
+        updatedAt: FieldValue.serverTimestamp(),
+      }).catch((e) => console.error("[email] No se pudo guardar estado email:", e.message));
+
       res.json({
         ok: true,
         mensaje: result.mensaje,
