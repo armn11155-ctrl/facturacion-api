@@ -18,6 +18,30 @@ const router = Router()
 // ── HEALTH CHECK (warmup para Render free tier) ───────────────────
 router.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }))
 
+// ── TRACKING DE APERTURA DE CORREO ────────────────────────────────
+// Llamado automáticamente cuando el cliente abre el correo (píxel 1x1)
+// No requiere auth — es una imagen pública dentro del email
+router.get('/track/:facturaId', async (req, res) => {
+  // Responder imagen transparente inmediatamente (no bloquear al cliente)
+  const pixel = Buffer.from(
+    'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'
+  );
+  res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store' });
+  res.send(pixel);
+
+  // Marcar como leído en background
+  try {
+    const db = getDb();
+    await db.collection('facturas').doc(req.params.facturaId).update({
+      leido_cliente: true,
+      leido_cliente_at: new Date().toISOString(),
+    });
+    console.log(`[track] ✅ Factura ${req.params.facturaId} marcada como leída`);
+  } catch (err) {
+    console.error('[track] Error al marcar leída:', err.message);
+  }
+})
+
 // ── AUTH ──────────────────────────────────────────────────────────
 router.post('/auth/login',          authCtrl.login)
 router.get ('/auth/me',             authJWT, authCtrl.me)
