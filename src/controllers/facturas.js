@@ -208,7 +208,23 @@ export const cobrar = async (req, res) => {
   try {
     const db = getDb();
     const { metodo_pago, nro_operacion, fecha_pago, monto } = req.body;
-    await db.collection(COL).doc(req.params.id).update({
+
+    if (!metodo_pago)
+      return res.status(400).json({ ok: false, error: '"metodo_pago" es obligatorio' });
+
+    const docRef = db.collection(COL).doc(req.params.id);
+    const doc    = await docRef.get();
+    if (!doc.exists)
+      return res.status(404).json({ ok: false, error: "Factura no encontrada" });
+
+    const factura = doc.data();
+    if (["Cobrada", "Pagada"].includes(factura.estado))
+      return res.json({ ok: true, mensaje: "La factura ya está cobrada", idempotente: true });
+
+    if (["Anulada", "Rechazada", "Borrador"].includes(factura.estado))
+      return res.status(400).json({ ok: false, error: `No se puede cobrar una factura en estado "${factura.estado}"` });
+
+    await docRef.update({
       estado: "Cobrada", pagado: true,
       fecha_pago: fecha_pago || new Date().toISOString().split("T")[0],
       metodo_pago, nro_operacion: nro_operacion || null,
