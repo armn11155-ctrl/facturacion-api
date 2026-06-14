@@ -1,3 +1,9 @@
+-- ⚠️  ARCHIVO DE REFERENCIA — NO SE USA EN PRODUCCIÓN
+-- La API (v2) usa Firebase Firestore como base de datos.
+-- Este schema SQL es documentación del modelo de datos legacy (v1 PostgreSQL).
+-- Se mantiene como referencia de estructura. No ejecutar.
+-- ──────────────────────────────────────────────────────────────────
+
 -- ══════════════════════════════════════════════════════════════════
 -- SCHEMA: facturacion_8millas
 -- Sistema de facturación electrónica para 8 Millas S.A.C.
