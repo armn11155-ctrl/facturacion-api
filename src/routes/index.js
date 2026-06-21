@@ -77,6 +77,63 @@ const ocrLimit = rateLimit({
 })
 router.post('/ocr', ocrLimit, authApiKey, analizarImagen)
 
+// ── PORTAL DE FACTURAS — datos del comprobante (público, token firmado) ──
+// Usado por el portal branded del cliente (facturacion-web /ver/:id).
+// Cargar esta página = lectura real y confiable (a diferencia del pixel):
+// un proxy de correo (Apple MPP, Gmail) NO abre páginas completas, solo
+// precarga imágenes <img>. Si esto se ejecutó, un humano hizo clic.
+router.get('/public/facturas/:facturaId', async (req, res) => {
+  const { facturaId } = req.params
+  const token = req.query.t
+
+  if (!idFirestoreValido(facturaId) || !verificarTrack(facturaId, token)) {
+    return res.status(403).json({ ok: false, error: 'Enlace inválido o expirado' })
+  }
+
+  try {
+    const db  = getDb()
+    const ref = db.collection('facturas').doc(facturaId)
+    const doc = await ref.get()
+    if (!doc.exists) return res.status(404).json({ ok: false, error: 'Comprobante no encontrado' })
+
+    const f = doc.data()
+
+    // Lectura real y confiable: se marca cuando el cliente carga este
+    // endpoint (clic deliberado), no por precarga automática de imágenes.
+    const primeraVez = !f.leido_cliente
+    await ref.update({
+      leido_cliente: true,
+      visto_portal: true,
+      ...(primeraVez ? { leido_cliente_at: new Date().toISOString() } : {}),
+    }).catch(() => {})
+
+    // Solo lo necesario para mostrar el portal — nada sensible de más.
+    res.json({
+      ok: true,
+      data: {
+        id: facturaId,
+        tipo_doc: f.tipo_doc,
+        numero_fmt: f.numero_fmt,
+        estado: f.estado,
+        fecha_emision: f.fecha_emision,
+        fecha_vencimiento: f.fecha_vencimiento ?? null,
+        cliente_nombre: f.cliente_nombre ?? null,
+        cliente_doc: f.cliente_doc ?? null,
+        concepto: f.concepto ?? null,
+        moneda: f.moneda ?? 'PEN',
+        subtotal: f.subtotal ?? null,
+        igv: f.igv ?? null,
+        total: f.total ?? 0,
+        emisor_razon: f.emisor_razon ?? process.env.EMISOR_RAZON_SOCIAL ?? null,
+        emisor_ruc: f.emisor_ruc ?? null,
+      },
+    })
+  } catch (err) {
+    console.error('[portal] Error:', err.message)
+    res.status(500).json({ ok: false, error: 'No se pudo cargar el comprobante' })
+  }
+})
+
 // ── VER COMPROBANTE (clic del cliente = lectura confiable) ────────
 // El cliente hace clic en "Ver comprobante" del correo → registra
 // visto_cliente=true (señal mucho más confiable que el pixel) y le
@@ -132,6 +189,7 @@ router.get ('/facturas/:id',         auth,    factCtrl.obtener)
 router.get ('/facturas/:id/pdf',     auth,    factCtrl.descargarPdf)   // ?formato=a4|ticket
 router.post('/facturas',             authJWT, factCtrl.crear)
 router.post('/facturas/:id/emitir',  authJWT, factCtrl.emitir)
+router.post('/facturas/:id/reenviar-email', authJWT, factCtrl.reenviarEmail)
 router.post('/facturas/:id/cobrar',  authJWT, factCtrl.cobrar)
 router.post('/facturas/:id/anular',  authJWT, factCtrl.anular)
 

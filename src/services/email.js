@@ -7,6 +7,10 @@ const GMAIL_PASS  = process.env.GMAIL_PASS;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || GMAIL_USER;
 const EMISOR      = process.env.EMISOR_RAZON_SOCIAL || "8 Millas S.A.C.";
 const API_URL     = (process.env.API_URL || "").replace(/\/$/, "");
+// Dominio del portal de comprobantes (la app web, no la API).
+// Hoy es el subdominio gratis de Cloudflare Pages; al comprar un dominio
+// propio, basta cambiar esta variable — el código no necesita tocarse.
+const PORTAL_URL  = (process.env.PORTAL_URL || "https://facturacion-web-abi.pages.dev").replace(/\/$/, "");
 
 const fmt = (n) =>
   "S/ " + Number(n || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 });
@@ -29,6 +33,18 @@ function htmlFactura(factura, esAdmin = false) {
   // Píxel de apertura — solo correo al cliente, con token firmado
   const trackingPixel = !esAdmin && factura.id && API_URL
     ? `<img src="${API_URL}/api/track/${factura.id}?t=${firmarTrack(factura.id)}" width="1" height="1" style="display:block" alt="" />`
+    : "";
+
+  // Botón "Ver Factura Electrónica" → portal con marca propia (Opción 1).
+  // Cargar esa página SÍ es una lectura confiable (a diferencia del pixel):
+  // los proxies de correo no abren páginas completas, solo precargan imágenes.
+  const portalUrl = !esAdmin && factura.id
+    ? `${PORTAL_URL}/ver/${factura.id}?t=${firmarTrack(factura.id)}`
+    : "";
+  const botonPortal = portalUrl
+    ? `<div style="text-align:center;margin:22px 0 4px">
+         <a href="${portalUrl}" style="display:inline-block;background:linear-gradient(135deg,#1D4ED8,#2563EB);color:#fff;text-decoration:none;padding:13px 30px;border-radius:10px;font-weight:700;font-size:14px;box-shadow:0 4px 14px rgba(29,78,216,0.3)">Ver Factura Electrónica →</a>
+       </div>`
     : "";
 
   // ── Cuerpo del correo ──────────────────────────────────────────────
@@ -54,7 +70,8 @@ function htmlFactura(factura, esAdmin = false) {
       <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">${saludoSegunHora()}, <b>${factura.cliente_nombre}</b>:</p>
       <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Espero que se encuentre muy bien.</p>
       <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Le comparto la factura correspondiente al servicio de panel publicitario realizado por <b>${MARCA}</b>. La encontrará <b>adjunta en formato PDF</b> en este mismo correo.</p>
-      <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Quedo atento a cualquier consulta o información adicional que pueda necesitar.</p>
+      ${botonPortal}
+      <p style="margin:18px 0 14px;font-size:15px;color:#333;line-height:1.6">Quedo atento a cualquier consulta o información adicional que pueda necesitar.</p>
       <p style="margin:0 0 18px;font-size:15px;color:#333;line-height:1.6">Muchas gracias por su confianza.</p>
       <p style="margin:0;font-size:15px;color:#333;line-height:1.6">Saludos cordiales,</p>
       <p style="margin:14px 0 0;font-size:15px;color:#111;font-weight:700">${FIRMA}</p>

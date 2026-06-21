@@ -185,6 +185,7 @@ export const emitir = async (req, res) => {
       await docRef.update({
         enviado_cliente: emailResult.clienteOk === true,
         leido_cliente:   false,
+        email_error:     emailResult.clienteOk === true ? null : (emailResult.clienteError || "No se pudo enviar"),
         updatedAt: FieldValue.serverTimestamp(),
       }).catch((e) => console.error("[email] No se pudo guardar estado email:", e.message));
 
@@ -221,6 +222,44 @@ export const emitir = async (req, res) => {
       }
       throw sunatErr;
     }
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+};
+
+// ── POST /api/facturas/:id/reenviar-email ──────────────────────────
+// Reenvía manualmente el correo al cliente (botón "Enviar a email" /
+// "Reintentar" en la UI cuando no se envió o falló la primera vez).
+// No vuelve a tocar SUNAT — solo el correo.
+export const reenviarEmail = async (req, res) => {
+  try {
+    const db = getDb();
+    const docRef = db.collection("facturas").doc(req.params.id);
+    const snap = await docRef.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: "Factura no encontrada" });
+
+    const factura = { id: snap.id, ...snap.data() };
+    if (!factura.cliente_email) {
+      return res.status(400).json({ ok: false, error: "El cliente no tiene correo registrado" });
+    }
+    if (!["Emitida", "Aceptada", "Pagada", "Vencida", "Rechazada"].includes(factura.estado)) {
+      return res.status(409).json({ ok: false, error: "Solo se puede reenviar un comprobante ya emitido" });
+    }
+
+    const emailResult = await enviarCorreoFactura(factura).catch((err) => ({
+      adminOk: false, clienteOk: false, clienteError: err.message,
+    }));
+
+    await docRef.update({
+      enviado_cliente: emailResult.clienteOk === true,
+      email_error:     emailResult.clienteOk === true ? null : (emailResult.clienteError || "No se pudo enviar"),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    if (!emailResult.clienteOk) {
+      return res.status(502).json({ ok: false, error: emailResult.clienteError || "No se pudo enviar el correo" });
+    }
+    res.json({ ok: true, mensaje: "Correo reenviado al cliente" });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
