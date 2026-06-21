@@ -2,7 +2,7 @@ import cron from 'node-cron'
 import { getDb } from '../lib/firebase.js'
 import { FieldValue } from 'firebase-admin/firestore'
 import { enviarResumenDiario, enviarASunat } from '../services/sunat.js'
-import { enviarCorreoFactura, enviarAlertaRechazo, enviarRecordatorioCobranza } from '../services/email.js'
+import { enviarCorreoFactura, enviarAlertaRechazo, enviarRecordatorioCobranza, enviarRespuestaLead } from '../services/email.js'
 import { enviarDigestDiario } from '../services/digest.js'
 
 // ── Logger simple ──────────────────────────────────────────────────
@@ -532,6 +532,41 @@ export async function generarBorradoresMensuales() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// JOB 10 — Respuesta automática a leads nuevos del formulario web
+// ══════════════════════════════════════════════════════════════════
+// Documento de bienvenida (sin precios) apenas llega una solicitud.
+// NO crea cliente ni contrato — solo responde rápido mientras el
+// asesor (Alan) hace seguimiento real. Marca respondido=true para
+// no enviarlo dos veces.
+// ══════════════════════════════════════════════════════════════════
+export async function responderLeadsNuevos() {
+  log('LEADS-WEB', 'Buscando solicitudes nuevas sin responder...')
+  try {
+    const db = getDb()
+    const snap = await db.collection('solicitudesWeb').get()
+    const pendientes = snap.docs.filter(d => d.data().respondido !== true && d.data().email)
+
+    if (pendientes.length === 0) { log('LEADS-WEB', 'Sin solicitudes nuevas.'); return }
+
+    let enviados = 0
+    for (const doc of pendientes) {
+      const solicitud = { id: doc.id, ...doc.data() }
+      const r = await enviarRespuestaLead(solicitud)
+      if (r.ok) {
+        await doc.ref.update({ respondido: true, respondido_at: new Date().toISOString() })
+        enviados++
+        log('LEADS-WEB', `✅ Respondido: ${solicitud.contacto || solicitud.email}`)
+      } else {
+        warn('LEADS-WEB', `${solicitud.email}: ${r.error}`)
+      }
+    }
+    log('LEADS-WEB', `Fin. Respondidos: ${enviados}/${pendientes.length}`)
+  } catch (err) {
+    warn('LEADS-WEB', `Error fatal: ${err.message}`)
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 // REGISTRO DE TODOS LOS JOBS
 // ══════════════════════════════════════════════════════════════════
 export function iniciarCrons() {
@@ -564,6 +599,9 @@ export function iniciarCrons() {
   // Job 9 — Resumen diario al gerente: diario 07:30 Lima
   cron.schedule('30 7 * * *', enviarDigestDiario, { timezone: 'America/Lima' })
 
+  // Job 10 — Responder leads nuevos del formulario web: cada 10 min
+  cron.schedule('*/10 * * * *', responderLeadsNuevos, { timezone: 'America/Lima' })
+
   console.log('⏰  Crons registrados (hora Lima):')
   console.log('   · 06:00 — Marcar facturas vencidas')
   console.log('   · 06:10 — Liberar paneles sin contrato activo')
@@ -573,4 +611,5 @@ export function iniciarCrons() {
   console.log('   · 23:00 — Resumen Diario de Boletas (RC) → SUNAT')
   console.log('   · cada 30 min — Reintentar emisiones por SUNAT caído')
   console.log('   · cada hora — Alertar comprobantes rechazados')
+  console.log('   · cada 10 min — Responder leads nuevos del formulario web')
 }
