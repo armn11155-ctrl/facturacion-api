@@ -11,106 +11,78 @@ const API_URL     = (process.env.API_URL || "").replace(/\/$/, "");
 const fmt = (n) =>
   "S/ " + Number(n || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 });
 
+function saludoSegunHora() {
+  const h = Number(new Intl.DateTimeFormat("es-PE", { hour: "numeric", hour12: false, timeZone: "America/Lima" }).format(new Date()));
+  if (h < 12) return "Buenos días";
+  if (h < 19) return "Buenas tardes";
+  return "Buenas noches";
+}
+
 function htmlFactura(factura, esAdmin = false) {
-  const tipo = factura.tipo_doc === "01" ? "Factura" : "Boleta";
-  const itemsHtml = (factura.items || [])
-    .map(
-      (it) => `
-      <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0">${it.descripcion || "-"}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:center">${it.cantidad}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right">${fmt(it.precio_unitario)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:600">${fmt(it.total)}</td>
-      </tr>`
-    )
-    .join("");
+  const tipo  = factura.tipo_doc === "01" ? "Factura" : "Boleta";
+  const FIRMA = process.env.FIRMA_NOMBRE || "Alan Martínez";
+  const CARGO = process.env.FIRMA_CARGO  || "Gerente General";
 
-  const periodoHtml =
-    factura.periodo_inicio && factura.periodo_fin
-      ? `<p style="margin:4px 0;color:#555">Período: <b>${factura.periodo_inicio}</b> al <b>${factura.periodo_fin}</b></p>`
-      : "";
-
-  // Píxel de tracking — solo para correo al cliente (no admin), con token firmado
+  // Píxel de apertura — solo correo al cliente, con token firmado
   const trackingPixel = !esAdmin && factura.id && API_URL
     ? `<img src="${API_URL}/api/track/${factura.id}?t=${firmarTrack(factura.id)}" width="1" height="1" style="display:block" alt="" />`
     : "";
 
-  // Firma personal (configurable). Si no se define, usa la razón social.
-  const FIRMA = process.env.FIRMA_NOMBRE || EMISOR;
-  const firmaBloque = !esAdmin
-    ? `<p style="margin:22px 0 0;font-size:14px;color:#333;line-height:1.5">Cualquier consulta quedo a tu disposición. ¡Gracias por la confianza!</p>
-       <p style="margin:10px 0 0;font-size:14px;color:#111;font-weight:600">${FIRMA}</p>`
-    : "";
+  // ── Cuerpo del correo ──────────────────────────────────────────────
+  let cuerpo;
+  if (esAdmin) {
+    // Copia de control para el gerente (informativa)
+    const items = (factura.items || []).map(it =>
+      `<tr>
+         <td style="padding:7px 10px;border-bottom:1px solid #f1f1f1">${it.descripcion || "-"}</td>
+         <td style="padding:7px 10px;border-bottom:1px solid #f1f1f1;text-align:right;font-weight:600">${fmt(it.total)}</td>
+       </tr>`).join("");
+    cuerpo = `
+      <p style="margin:0 0 14px;font-size:15px;color:#333">Se emitió la ${tipo.toLowerCase()} <b>${factura.numero_fmt}</b> a <b>${factura.cliente_nombre}</b>.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;background:#f8fafc;border-radius:8px;overflow:hidden">
+        ${items}
+        <tr><td style="padding:10px;font-weight:700">Total</td>
+            <td style="padding:10px;text-align:right;font-weight:700;color:#1D4ED8">${fmt(factura.total)}</td></tr>
+      </table>
+      <p style="margin:14px 0 0;font-size:12px;color:#999">Estado de envío al cliente: ${factura.cliente_email ? factura.cliente_email : "sin correo registrado"}</p>`;
+  } else {
+    // Correo elegante y breve para el cliente, firmado por el gerente
+    cuerpo = `
+      <p style="margin:0 0 16px;font-size:15px;color:#333;line-height:1.6">
+        ${saludoSegunHora()}, <b>${factura.cliente_nombre}</b>:
+      </p>
+      <p style="margin:0 0 16px;font-size:15px;color:#333;line-height:1.6">
+        Le hago llegar el comprobante correspondiente al servicio de panel publicitario.
+        Lo encontrará <b>adjunto en formato PDF</b> en este mismo correo.
+      </p>
+      <div style="background:#f8fafc;border:1px solid #eef1f6;border-radius:10px;padding:14px 18px;margin:0 0 18px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;color:#555">
+          <tr><td style="padding:3px 0">Comprobante</td><td style="padding:3px 0;text-align:right;font-weight:700;color:#111">${factura.numero_fmt}</td></tr>
+          <tr><td style="padding:3px 0">Fecha</td><td style="padding:3px 0;text-align:right">${factura.fecha_emision || "-"}</td></tr>
+          <tr><td style="padding:3px 0">Total</td><td style="padding:3px 0;text-align:right;font-weight:700;color:#1D4ED8;font-size:16px">${fmt(factura.total)}</td></tr>
+        </table>
+      </div>
+      <p style="margin:0 0 4px;font-size:15px;color:#333;line-height:1.6">Quedo atento a cualquier consulta.</p>
+      <p style="margin:22px 0 0;font-size:14px;color:#333;line-height:1.5">Saludos cordiales,</p>
+      <p style="margin:6px 0 0;font-size:15px;color:#111;font-weight:700">${FIRMA}</p>
+      <p style="margin:1px 0 0;font-size:13px;color:#777">${CARGO} · ${EMISOR}</p>`;
+  }
 
   return `
 <!DOCTYPE html>
 <html lang="es">
 <head><meta charset="UTF-8"><title>${tipo} ${factura.numero_fmt}</title></head>
-<body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,sans-serif">
-  <div style="max-width:600px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,.08)">
-    <div style="background:linear-gradient(135deg,#1D4ED8 0%,#2563EB 100%);padding:28px 32px">
-      <div style="display:flex;align-items:center;gap:12px">
-        <div style="width:44px;height:44px;background:rgba(255,255,255,.2);border-radius:10px;display:flex;align-items:center;justify-content:center">
-          <span style="color:#fff;font-weight:900;font-size:16px">8M</span>
-        </div>
-        <div>
-          <p style="margin:0;color:rgba(255,255,255,.8);font-size:12px;text-transform:uppercase;letter-spacing:1px">${EMISOR}</p>
-          <p style="margin:0;color:#fff;font-size:20px;font-weight:700">${tipo} emitida ✅</p>
-        </div>
-      </div>
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',Arial,sans-serif">
+  <div style="max-width:560px;margin:32px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.07)">
+    <div style="background:linear-gradient(135deg,#1D4ED8 0%,#2563EB 100%);padding:24px 30px">
+      <p style="margin:0;color:rgba(255,255,255,.85);font-size:11px;text-transform:uppercase;letter-spacing:2px">${EMISOR}</p>
+      <p style="margin:4px 0 0;color:#fff;font-size:19px;font-weight:700">${esAdmin ? `${tipo} emitida` : `${tipo} ${factura.numero_fmt}`}</p>
     </div>
-    <div style="padding:28px 32px">
-      <p style="margin:0 0 20px;font-size:15px;color:#333">
-        ${esAdmin
-          ? `Se emitió la ${tipo.toLowerCase()} <b>${factura.numero_fmt}</b> para el cliente <b>${factura.cliente_nombre}</b>.`
-          : `Hola <b>${factura.cliente_nombre}</b>,<br/><br/>Espero que te encuentres muy bien. Te comparto el comprobante <b>${factura.numero_fmt}</b>${factura.panel_nombre ? ` correspondiente al panel <b>${factura.panel_nombre}</b>` : ""}, que encontrarás <b>adjunto en PDF</b> en este correo.<br/><br/>A continuación, el detalle:`
-        }
-      </p>
-      <div style="background:#f8fafc;border-radius:8px;padding:16px 20px;margin-bottom:20px">
-        <table style="width:100%;border-collapse:collapse">
-          <tr>
-            <td style="padding:4px 0;color:#777;font-size:13px;width:45%">Número</td>
-            <td style="padding:4px 0;font-weight:700;font-size:14px">${factura.numero_fmt}</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 0;color:#777;font-size:13px">Fecha emisión</td>
-            <td style="padding:4px 0;font-size:13px">${factura.fecha_emision || "-"}</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 0;color:#777;font-size:13px">Cliente</td>
-            <td style="padding:4px 0;font-size:13px">${factura.cliente_nombre}</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 0;color:#777;font-size:13px">RUC / DNI</td>
-            <td style="padding:4px 0;font-size:13px">${factura.cliente_doc}</td>
-          </tr>
-          ${factura.panel_nombre ? `<tr><td style="padding:4px 0;color:#777;font-size:13px">Panel</td><td style="padding:4px 0;font-size:13px">${factura.panel_nombre}${factura.cara_panel ? " — Cara " + factura.cara_panel : ""}</td></tr>` : ""}
-        </table>
-        ${periodoHtml}
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px">
-        <thead>
-          <tr style="background:#f0f4ff">
-            <th style="padding:8px 12px;text-align:left;color:#555;font-weight:600">Descripción</th>
-            <th style="padding:8px 12px;text-align:center;color:#555;font-weight:600">Cant.</th>
-            <th style="padding:8px 12px;text-align:right;color:#555;font-weight:600">P. Unit.</th>
-            <th style="padding:8px 12px;text-align:right;color:#555;font-weight:600">Total</th>
-          </tr>
-        </thead>
-        <tbody>${itemsHtml}</tbody>
-      </table>
-      <div style="text-align:right;font-size:13px;color:#555;margin-bottom:8px">
-        ${!factura.es_exonerado
-          ? `<p style="margin:2px 0">Subtotal: ${fmt(factura.subtotal)}</p>
-             <p style="margin:2px 0">IGV (18%): ${fmt(factura.igv)}</p>`
-          : `<p style="margin:2px 0;color:#059669">Operación exonerada de IGV</p>`
-        }
-        <p style="margin:8px 0 0;font-size:18px;font-weight:700;color:#1D4ED8">Total: ${fmt(factura.total)}</p>
-      </div>
-      ${firmaBloque}
+    <div style="padding:28px 30px">
+      ${cuerpo}
     </div>
-    <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #eee;text-align:center">
-      <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Sistema de Facturación Electrónica</p>
+    <div style="background:#f8fafc;padding:14px 30px;border-top:1px solid #eee;text-align:center">
+      <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Publicidad Exterior</p>
     </div>
   </div>
   ${trackingPixel}
@@ -170,7 +142,7 @@ export async function enviarCorreoFactura(factura) {
       await transporter.sendMail({
         from:    `"${EMISOR}" <${GMAIL_USER}>`,
         to:      factura.cliente_email,
-        subject: `Tu ${tipo} ${factura.numero_fmt} — ${EMISOR}`,
+        subject: `${tipo} ${factura.numero_fmt} · Servicio de panel publicitario — ${EMISOR}`,
         html:    htmlFactura(factura, false),
         attachments,
       });

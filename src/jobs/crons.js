@@ -3,6 +3,7 @@ import { getDb } from '../lib/firebase.js'
 import { FieldValue } from 'firebase-admin/firestore'
 import { enviarResumenDiario, enviarASunat } from '../services/sunat.js'
 import { enviarCorreoFactura, enviarAlertaRechazo, enviarRecordatorioCobranza } from '../services/email.js'
+import { enviarDigestDiario } from '../services/digest.js'
 
 // ── Logger simple ──────────────────────────────────────────────────
 const log  = (job, msg) => console.log(`[CRON:${job}] ${new Date().toISOString()} — ${msg}`)
@@ -560,10 +561,14 @@ export function iniciarCrons() {
   // Job 7 — Recordatorios de cobranza al cliente: diario 09:00 Lima
   cron.schedule('0 9 * * *', enviarRecordatoriosCobranza, { timezone: 'America/Lima' })
 
+  // Job 9 — Resumen diario al gerente: diario 07:30 Lima
+  cron.schedule('30 7 * * *', enviarDigestDiario, { timezone: 'America/Lima' })
+
   console.log('⏰  Crons registrados (hora Lima):')
   console.log('   · 06:00 — Marcar facturas vencidas')
   console.log('   · 06:10 — Liberar paneles sin contrato activo')
   console.log('   · 07:00 — Borradores de factura por mes pagado (listos para emitir)')
+  console.log('   · 07:30 — Resumen diario al gerente (pendientes del día)')
   console.log('   · 09:00 — Recordatorios de cobranza al cliente')
   console.log('   · 23:00 — Resumen Diario de Boletas (RC) → SUNAT')
   console.log('   · cada 30 min — Reintentar emisiones por SUNAT caído')
