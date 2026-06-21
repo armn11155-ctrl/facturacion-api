@@ -2,6 +2,7 @@ import { getDb } from "../lib/firebase.js";
 import { enviarASunat, enviarComunicacionBaja } from "../services/sunat.js";
 import { generarPdfFactura, generarPdfTicket } from "../services/pdf.js";
 import { enviarCorreoFactura } from "../services/email.js";
+import { firmarTrack } from "../lib/tracking.js";
 import { FieldValue } from "firebase-admin/firestore";
 
 const COL = "facturas";
@@ -39,6 +40,25 @@ export const obtener = async (req, res) => {
     const doc = await db.collection(COL).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ ok: false, error: "Factura no encontrada" });
     res.json({ ok: true, data: { id: doc.id, ...doc.data() } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+};
+
+// ── GET /api/facturas/:id/portal-link ──────────────────────────────
+// Genera el enlace real del Portal de Comprobantes para esta factura,
+// firmado con el mismo secreto que usa el correo. Pensado para que el
+// administrador (Alan) pueda abrir "la vista del cliente" tal cual la
+// vería el cliente real — no una maqueta. Requiere sesión (authJWT).
+export const portalLink = async (req, res) => {
+  try {
+    const db   = getDb();
+    const doc  = await db.collection(COL).doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ ok: false, error: "Factura no encontrada" });
+
+    const PORTAL_URL = (process.env.PORTAL_URL || "https://facturacion-web-abi.pages.dev").replace(/\/$/, "");
+    const url = `${PORTAL_URL}/ver/${req.params.id}?t=${firmarTrack(req.params.id)}`;
+    res.json({ ok: true, url });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

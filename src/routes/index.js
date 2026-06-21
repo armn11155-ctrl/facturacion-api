@@ -186,6 +186,7 @@ router.get('/firebase/usage', authApiKey, getFirebaseUsage)
 // ── FACTURAS ──────────────────────────────────────────────────────
 router.get ('/facturas',             auth,    factCtrl.listar)
 router.get ('/facturas/:id',         auth,    factCtrl.obtener)
+router.get ('/facturas/:id/portal-link', authJWT, factCtrl.portalLink)
 router.get ('/facturas/:id/pdf',     auth,    factCtrl.descargarPdf)   // ?formato=a4|ticket
 router.post('/facturas',             authJWT, factCtrl.crear)
 router.post('/facturas/:id/emitir',  authJWT, factCtrl.emitir)
