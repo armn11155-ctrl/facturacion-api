@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { authJWT, authApiKey, auth, soloAdmin } from '../middleware/auth.js'
 import rateLimit from 'express-rate-limit'
 import { getDb } from '../lib/firebase.js'
+import { verificarTrack, idFirestoreValido } from '../lib/tracking.js'
 
 // Controllers
 import * as authCtrl from '../controllers/auth.js'
@@ -19,31 +20,52 @@ const router = Router()
 router.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }))
 
 // ── TRACKING DE APERTURA DE CORREO ────────────────────────────────
-// Llamado automáticamente cuando el cliente abre el correo (píxel 1x1)
-// No requiere auth — es una imagen pública dentro del email
+// Llamado automáticamente cuando el cliente abre el correo (píxel 1x1).
+// No requiere login, PERO exige un token firmado (?t=) para que nadie
+// pueda marcar facturas como leídas con IDs arbitrarios.
 router.get('/track/:facturaId', async (req, res) => {
-  // Responder imagen transparente inmediatamente (no bloquear al cliente)
+  // Siempre responder el pixel (no romper la imagen del correo)
   const pixel = Buffer.from(
     'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'
   );
   res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store' });
   res.send(pixel);
 
-  // Marcar como leído en background
+  const { facturaId } = req.params;
+  const token = req.query.t;
+
+  // Validaciones de seguridad: forma del ID + firma válida
+  if (!idFirestoreValido(facturaId) || !verificarTrack(facturaId, token)) {
+    return; // pixel ya enviado; ignorar escritura no autorizada
+  }
+
+  // Marcar como leído en background (solo si el doc existe)
   try {
-    const db = getDb();
-    await db.collection('facturas').doc(req.params.facturaId).update({
+    const db  = getDb();
+    const ref = db.collection('facturas').doc(facturaId);
+    const doc = await ref.get();
+    if (!doc.exists) return;
+    await ref.update({
       leido_cliente: true,
       leido_cliente_at: new Date().toISOString(),
     });
-    console.log(`[track] ✅ Factura ${req.params.facturaId} marcada como leída`);
+    console.log(`[track] ✅ Factura ${facturaId} marcada como leída`);
   } catch (err) {
     console.error('[track] Error al marcar leída:', err.message);
   }
 })
 
 // ── AUTH ──────────────────────────────────────────────────────────
-router.post('/auth/login',          authCtrl.login)
+// Límite estricto anti-fuerza-bruta en el login (sistema de dinero):
+// 10 intentos por IP cada 15 min.
+const loginLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Demasiados intentos de inicio de sesión. Espera 15 minutos.' },
+})
+router.post('/auth/login',          loginLimit, authCtrl.login)
 router.get ('/auth/me',             authJWT, authCtrl.me)
 router.post('/auth/api-keys',       authJWT, soloAdmin, authCtrl.generarApiKey)
 

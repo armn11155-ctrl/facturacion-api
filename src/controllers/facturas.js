@@ -195,7 +195,30 @@ export const emitir = async (req, res) => {
         email: emailResult,
       });
     } catch (sunatErr) {
-      await docRef.update({ estado: "Borrador", sunat_mensaje: sunatErr?.message || "Error al enviar a SUNAT", updatedAt: FieldValue.serverTimestamp() });
+      const msg = sunatErr?.message || "Error al enviar a SUNAT";
+      const esRechazo = /rechaz/i.test(msg); // "SUNAT rechazó el comprobante: ..."
+
+      if (esRechazo) {
+        // Rechazo de negocio: NO reintentar automáticamente, requiere revisión.
+        // La marca rechazo_notificado=false la levanta el cron de alertas.
+        await docRef.update({
+          estado: "Rechazada",
+          sunat_estado: "Rechazado",
+          sunat_mensaje: msg,
+          rechazo_notificado: false,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        // SUNAT caído / error de red / timeout: marcar para reintento automático.
+        await docRef.update({
+          estado: "Borrador",
+          sunat_estado: "Pendiente_Reintento",
+          sunat_mensaje: msg,
+          reintentos: FieldValue.increment(1),
+          ultimo_intento_at: new Date().toISOString(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
       throw sunatErr;
     }
   } catch (err) {

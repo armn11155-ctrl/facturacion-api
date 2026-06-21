@@ -1,7 +1,8 @@
 import cron from 'node-cron'
 import { getDb } from '../lib/firebase.js'
 import { FieldValue } from 'firebase-admin/firestore'
-import { enviarResumenDiario } from '../services/sunat.js'
+import { enviarResumenDiario, enviarASunat } from '../services/sunat.js'
+import { enviarCorreoFactura, enviarAlertaRechazo, enviarRecordatorioCobranza } from '../services/email.js'
 
 // ── Logger simple ──────────────────────────────────────────────────
 const log  = (job, msg) => console.log(`[CRON:${job}] ${new Date().toISOString()} — ${msg}`)
@@ -259,6 +260,155 @@ export async function enviarResumenDiarioCron() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// JOB 5 — Reintentar emisiones que fallaron por SUNAT caído
+// ══════════════════════════════════════════════════════════════════
+// Procesa facturas marcadas con sunat_estado = 'Pendiente_Reintento'
+// (errores de red/timeout, NO rechazos de negocio). Reintenta enviar
+// a SUNAT hasta MAX_REINTENTOS veces.
+// ══════════════════════════════════════════════════════════════════
+const MAX_REINTENTOS = 5
+
+export async function reintentarEmisionesPendientes() {
+  log('REINTENTO', 'Buscando emisiones pendientes por SUNAT caído...')
+  try {
+    const db = getDb()
+    const snap = await db.collection('facturas')
+      .where('deleted', '==', false)
+      .where('sunat_estado', '==', 'Pendiente_Reintento')
+      .get()
+
+    if (snap.empty) { log('REINTENTO', 'Sin emisiones pendientes.'); return }
+
+    let reenviadas = 0, agotadas = 0
+    for (const doc of snap.docs) {
+      const factura = { id: doc.id, ...doc.data() }
+      if ((factura.reintentos || 0) >= MAX_REINTENTOS) {
+        // Agotó reintentos: dejar en error definitivo y avisar al admin
+        await doc.ref.update({ sunat_estado: 'Error_Definitivo', updatedAt: FieldValue.serverTimestamp() })
+        await enviarAlertaRechazo(factura, `No se pudo emitir tras ${MAX_REINTENTOS} intentos: ${factura.sunat_mensaje || ''}`, 'Reintento agotado').catch(() => {})
+        agotadas++
+        continue
+      }
+
+      try {
+        await doc.ref.update({ estado: 'Emitiendo', updatedAt: FieldValue.serverTimestamp() })
+        const result = await enviarASunat(factura.id, factura, factura.items || [])
+        await doc.ref.update({ sunat_estado: 'Aceptado', updatedAt: FieldValue.serverTimestamp() })
+        await enviarCorreoFactura(factura).catch(() => {})
+        reenviadas++
+        log('REINTENTO', `✅ ${factura.numero_fmt} emitida — ${result.mensaje}`)
+      } catch (err) {
+        const msg = err?.message || 'Error desconocido'
+        if (/rechaz/i.test(msg)) {
+          // Era un rechazo de negocio, no SUNAT caído: sacar de la cola
+          await doc.ref.update({
+            estado: 'Rechazada', sunat_estado: 'Rechazado', sunat_mensaje: msg,
+            rechazo_notificado: false, updatedAt: FieldValue.serverTimestamp(),
+          })
+        } else {
+          await doc.ref.update({
+            estado: 'Borrador', sunat_estado: 'Pendiente_Reintento', sunat_mensaje: msg,
+            reintentos: FieldValue.increment(1), ultimo_intento_at: new Date().toISOString(),
+            updatedAt: FieldValue.serverTimestamp(),
+          })
+        }
+        warn('REINTENTO', `${factura.numero_fmt}: ${msg}`)
+      }
+    }
+    log('REINTENTO', `Fin. Reenviadas: ${reenviadas} | Agotadas: ${agotadas}`)
+  } catch (err) {
+    warn('REINTENTO', `Error fatal: ${err.message}`)
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// JOB 6 — Alertar al admin de comprobantes rechazados por SUNAT
+// ══════════════════════════════════════════════════════════════════
+export async function alertarRechazos() {
+  log('RECHAZOS', 'Buscando comprobantes rechazados sin notificar...')
+  try {
+    const db = getDb()
+    const snap = await db.collection('facturas')
+      .where('deleted', '==', false)
+      .where('estado', '==', 'Rechazada')
+      .get()
+
+    const pendientes = snap.docs.filter(d => d.data().rechazo_notificado !== true)
+    if (pendientes.length === 0) { log('RECHAZOS', 'Nada que notificar.'); return }
+
+    let notificadas = 0
+    for (const doc of pendientes) {
+      const factura = { id: doc.id, ...doc.data() }
+      const r = await enviarAlertaRechazo(factura, factura.sunat_mensaje || '', 'Emisión')
+      if (r.ok) {
+        await doc.ref.update({ rechazo_notificado: true, rechazo_notificado_at: new Date().toISOString() })
+        notificadas++
+      }
+    }
+    log('RECHAZOS', `✅ ${notificadas} alerta(s) enviada(s).`)
+  } catch (err) {
+    warn('RECHAZOS', err.message)
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// JOB 7 — Recordatorios de cobranza al cliente
+// ══════════════════════════════════════════════════════════════════
+// Envía: 3 días antes del vencimiento, el día del vencimiento,
+// y 3 y 7 días después si sigue sin pagarse.
+// ══════════════════════════════════════════════════════════════════
+function diasEntre(fechaStr, hoy = new Date()) {
+  if (!fechaStr) return null
+  const v = new Date(fechaStr + 'T00:00:00')
+  const h = new Date(hoy.toISOString().split('T')[0] + 'T00:00:00')
+  return Math.round((v - h) / 86400000) // >0 faltan días, 0 hoy, <0 vencida
+}
+
+export async function enviarRecordatoriosCobranza() {
+  log('COBRANZA', 'Revisando facturas por cobrar...')
+  try {
+    const db = getDb()
+    const snap = await db.collection('facturas')
+      .where('deleted', '==', false)
+      .where('estado', 'in', ['Emitida', 'Aceptada', 'Vencida'])
+      .get()
+
+    if (snap.empty) { log('COBRANZA', 'Sin facturas por cobrar.'); return }
+
+    let enviados = 0
+    for (const doc of snap.docs) {
+      const f = { id: doc.id, ...doc.data() }
+      if (!f.cliente_email || !f.fecha_vencimiento) continue
+      if (['Pagada', 'Cobrada', 'Anulada'].includes(f.estado)) continue
+
+      const d = diasEntre(f.fecha_vencimiento)
+      let fase = null, clave = null, dias = 0
+      if (d === 3)        { fase = 'previo';      clave = 'previo';     dias = 3 }
+      else if (d === 0)   { fase = 'vencimiento'; clave = 'vencimiento' }
+      else if (d === -3)  { fase = 'vencido';     clave = 'vencido_3';  dias = 3 }
+      else if (d === -7)  { fase = 'vencido';     clave = 'vencido_7';  dias = 7 }
+      if (!fase) continue
+
+      const enviado = f.cobranza_enviada || {}
+      if (enviado[clave]) continue // ya se envió esta fase
+
+      const r = await enviarRecordatorioCobranza(f, fase, dias)
+      if (r.ok) {
+        await doc.ref.update({
+          [`cobranza_enviada.${clave}`]: true,
+          cobranza_ultimo_envio: new Date().toISOString(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        enviados++
+      }
+    }
+    log('COBRANZA', `✅ ${enviados} recordatorio(s) enviado(s).`)
+  } catch (err) {
+    warn('COBRANZA', err.message)
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 // REGISTRO DE TODOS LOS JOBS
 // ══════════════════════════════════════════════════════════════════
 export function iniciarCrons() {
@@ -275,9 +425,21 @@ export function iniciarCrons() {
   // Procesa boletas de ayer que aún no tienen RC enviado.
   cron.schedule('0 23 * * *', enviarResumenDiarioCron, { timezone: 'America/Lima' })
 
+  // Job 5 — Reintentar emisiones por SUNAT caído: cada 30 min
+  cron.schedule('*/30 * * * *', reintentarEmisionesPendientes, { timezone: 'America/Lima' })
+
+  // Job 6 — Alertar rechazos sin notificar: cada hora
+  cron.schedule('15 * * * *', alertarRechazos, { timezone: 'America/Lima' })
+
+  // Job 7 — Recordatorios de cobranza al cliente: diario 09:00 Lima
+  cron.schedule('0 9 * * *', enviarRecordatoriosCobranza, { timezone: 'America/Lima' })
+
   console.log('⏰  Crons registrados (hora Lima):')
   console.log('   · 06:00 — Marcar facturas vencidas')
   console.log('   · 06:10 — Liberar paneles sin contrato activo')
   console.log('   · 07:00 — Generar borradores de factura automáticos')
+  console.log('   · 09:00 — Recordatorios de cobranza al cliente')
   console.log('   · 23:00 — Resumen Diario de Boletas (RC) → SUNAT')
+  console.log('   · cada 30 min — Reintentar emisiones por SUNAT caído')
+  console.log('   · cada hora — Alertar comprobantes rechazados')
 }

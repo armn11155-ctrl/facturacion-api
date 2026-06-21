@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Audit · Lint · Syntax check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Reporta vulnerabilidades altas/críticas en producción.
+      # continue-on-error mientras se limpian las 12 actuales; Dependabot
+      # irá abriendo PRs para resolverlas. Cuando lleguen a 0, quita esta línea.
+      - name: Security audit (prod)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      # Verifica que ningún archivo tenga errores de sintaxis.
+      - name: Syntax check (node --check)
+        run: |
+          set -e
+          find src scripts -name "*.js" 2>/dev/null | while read -r f; do
+            node --check "$f"
+          done
+          echo "✅ Sintaxis OK en todos los archivos .js"
