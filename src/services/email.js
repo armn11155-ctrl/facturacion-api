@@ -35,14 +35,11 @@ function htmlFactura(factura, esAdmin = false) {
     ? `<img src="${API_URL}/api/track/${factura.id}?t=${firmarTrack(factura.id)}" width="1" height="1" style="display:block" alt="" />`
     : "";
 
-  // Botón "Ver comprobante" — clic = confirmación de lectura CONFIABLE (no como el pixel)
-  const verUrl = !esAdmin && factura.id && API_URL
-    ? `${API_URL}/api/ver/${factura.id}?t=${firmarTrack(factura.id)}`
-    : "";
-  const verBtn = verUrl
-    ? `<div style="text-align:center;margin:20px 0 4px">
-         <a href="${verUrl}" style="display:inline-block;background:#1D4ED8;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px">Ver / descargar comprobante</a>
-       </div>`
+  // Firma personal (configurable). Si no se define, usa la razón social.
+  const FIRMA = process.env.FIRMA_NOMBRE || EMISOR;
+  const firmaBloque = !esAdmin
+    ? `<p style="margin:22px 0 0;font-size:14px;color:#333;line-height:1.5">Cualquier consulta quedo a tu disposición. ¡Gracias por la confianza!</p>
+       <p style="margin:10px 0 0;font-size:14px;color:#111;font-weight:600">${FIRMA}</p>`
     : "";
 
   return `
@@ -66,7 +63,7 @@ function htmlFactura(factura, esAdmin = false) {
       <p style="margin:0 0 20px;font-size:15px;color:#333">
         ${esAdmin
           ? `Se emitió la ${tipo.toLowerCase()} <b>${factura.numero_fmt}</b> para el cliente <b>${factura.cliente_nombre}</b>.`
-          : `Estimado/a <b>${factura.cliente_nombre}</b>, ¡gracias por confiar en nosotros! 🙌<br/><br/>Adjuntamos tu comprobante <b>${factura.numero_fmt}</b>. Aquí tienes el detalle:`
+          : `Hola <b>${factura.cliente_nombre}</b>,<br/><br/>Espero que te encuentres muy bien. Te comparto el comprobante <b>${factura.numero_fmt}</b>${factura.panel_nombre ? ` correspondiente al panel <b>${factura.panel_nombre}</b>` : ""}, que encontrarás <b>adjunto en PDF</b> en este correo.<br/><br/>A continuación, el detalle:`
         }
       </p>
       <div style="background:#f8fafc;border-radius:8px;padding:16px 20px;margin-bottom:20px">
@@ -110,7 +107,7 @@ function htmlFactura(factura, esAdmin = false) {
         }
         <p style="margin:8px 0 0;font-size:18px;font-weight:700;color:#1D4ED8">Total: ${fmt(factura.total)}</p>
       </div>
-      ${verBtn}
+      ${firmaBloque}
     </div>
     <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #eee;text-align:center">
       <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Sistema de Facturación Electrónica</p>
