@@ -30,7 +30,7 @@
     "@sparticuz/chromium": "^123.0.0",
     "qrcode": "^1.5.3",
     "node-cron": "^3.0.3",
-    "nodemailer": "^6.9.13"
+    "nodemailer": "^9.0.1"
   },
   "engines": {
     "node": "20.x"
