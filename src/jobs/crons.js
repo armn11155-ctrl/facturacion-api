@@ -409,6 +409,128 @@ export async function enviarRecordatoriosCobranza() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// JOB 8 — Borradores mensuales: 1 borrador por mes PAGADO no facturado
+// ══════════════════════════════════════════════════════════════════
+// Flujo real del negocio: se factura mes a mes cuando el cliente paga.
+// Cuando marcas pagosMeses["YYYY-MM"] = true en un contrato, este job
+// crea el BORRADOR de factura de ese mes (monto = precio mensual),
+// listo para que lo emitas con un clic. NUNCA emite solo.
+// Dedup: no crea si el mes ya está en mesesFacturados ni si ya existe
+// un borrador para ese contrato+mes.
+// ══════════════════════════════════════════════════════════════════
+
+/** Enumera los meses "YYYY-MM" entre dos fechas "YYYY-MM-DD" (inclusive). */
+function enumerarMeses(inicioStr, finStr) {
+  if (!inicioStr || !finStr) return []
+  const ini = new Date(inicioStr + 'T00:00:00')
+  const fin = new Date(finStr + 'T00:00:00')
+  const out = []
+  const d = new Date(ini.getFullYear(), ini.getMonth(), 1)
+  const tope = new Date(fin.getFullYear(), fin.getMonth(), 1)
+  while (d <= tope) {
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    d.setMonth(d.getMonth() + 1)
+  }
+  return out
+}
+
+export async function generarBorradoresMensuales() {
+  log('BORR-MES', 'Buscando meses pagados sin facturar...')
+  try {
+    const db = getDb()
+
+    // Numeración local incremental (evita carreras al crear varios borradores)
+    const serie = 'F001', tipDoc = '01'
+    const lastSnap = await db.collection('facturas')
+      .where('serie', '==', serie).where('tipo_doc', '==', tipDoc).where('deleted', '==', false)
+      .orderBy('numero', 'desc').limit(1).get()
+    let proximoNumero = lastSnap.empty ? 1 : (lastSnap.docs[0].data().numero || 0) + 1
+
+    const contratosSnap = await db.collection('contratos').where('deleted', '==', false).get()
+    if (contratosSnap.empty) { log('BORR-MES', 'Sin contratos.'); return }
+
+    let creados = 0, omitidos = 0
+    for (const cDoc of contratosSnap.docs) {
+      const contrato = { id: cDoc.id, ...cDoc.data() }
+      const pagos = contrato.pagosMeses || {}
+      const facturados = contrato.mesesFacturados || {}
+
+      // Meses dentro del periodo del contrato que están pagados
+      const mesesContrato = enumerarMeses(contrato.inicio, contrato.fin)
+      const mesesPagados = mesesContrato.filter(m => pagos[m] === true)
+      if (mesesPagados.length === 0) continue
+
+      // Datos de panel y cliente (una vez por contrato)
+      let panel = { nombre: 'Panel', ciudad: '', tipo: '' }
+      let cliente = { empresa: 'Cliente', ruc: '', email: null, direccion: null }
+      if (contrato.panel_id) {
+        try { const pd = await db.collection('paneles').doc(contrato.panel_id).get(); if (pd.exists) panel = { id: pd.id, ...pd.data() } } catch { /* opcional */ }
+      }
+      if (contrato.cliente_id) {
+        try { const cd = await db.collection('clientes').doc(contrato.cliente_id).get(); if (cd.exists) cliente = { id: cd.id, ...cd.data() } } catch { /* opcional */ }
+      }
+
+      for (const mes of mesesPagados) {
+        // Dedup 1: ya facturado (Emitida/Cobrada)
+        if (facturados[mes]) { omitidos++; continue }
+        // Dedup 2: ya existe un borrador/factura para este contrato+mes
+        const existe = await db.collection('facturas')
+          .where('contrato_id', '==', contrato.id)
+          .where('periodo_mes', '==', mes)
+          .where('deleted', '==', false)
+          .limit(1).get()
+        if (!existe.empty) { omitidos++; continue }
+
+        const montoMensual = Number(contrato.monto || 0)
+        const subtotal = Number((montoMensual / 1.18).toFixed(2))
+        const igv = Number((montoMensual - subtotal).toFixed(2))
+        const numero = proximoNumero++
+        const numero_fmt = `${serie}-${String(numero).padStart(8, '0')}`
+        const hoy = hoyStr()
+        const etiquetaMes = mes // "YYYY-MM"
+
+        const nuevaFactura = {
+          tipo_doc: tipDoc, serie, numero, numero_fmt,
+          fecha_emision: hoy, fecha_vencimiento: contrato.fin,
+          emisor_ruc: process.env.EMISOR_RUC, emisor_razon: process.env.EMISOR_RAZON_SOCIAL,
+          cliente_tipo_doc: 'RUC', cliente_doc: cliente.ruc || '',
+          cliente_nombre: cliente.empresa || 'Cliente',
+          cliente_email: cliente.email || null, cliente_direccion: cliente.direccion || null,
+          cliente_id: contrato.cliente_id || null,
+          panel_id: contrato.panel_id || null, panel_nombre: panel.nombre || null,
+          cara_panel: contrato.cara || null,
+          contrato_id: contrato.id, periodo_mes: etiquetaMes,
+          periodo_inicio: contrato.inicio || null, periodo_fin: contrato.fin || null,
+          concepto: `Arrendamiento de Panel Publicitario — ${panel.nombre || ''} · ${panel.ciudad || ''} — mes ${etiquetaMes}`,
+          moneda: 'PEN', es_exonerado: false,
+          subtotal, igv, total: montoMensual, op_gravada: subtotal, op_exonerada: 0, op_inafecta: 0,
+          items: [{
+            orden: 1,
+            descripcion: `Arrendamiento de Panel Publicitario — ${panel.nombre || ''} (${etiquetaMes})`,
+            unidad_medida: 'ZZ', cantidad: 1, precio_unitario: subtotal,
+            subtotal, igv_item: igv, total: montoMensual,
+          }],
+          estado: 'Borrador', deleted: false, origen: 'cron_mensual', creado_por: 'sistema',
+          createdAt: FieldValue.serverTimestamp(),
+        }
+
+        try {
+          await db.collection('facturas').add(nuevaFactura)
+          creados++
+          log('BORR-MES', `✅ ${numero_fmt} — ${cliente.empresa} · ${panel.nombre} · ${etiquetaMes}`)
+        } catch (err) {
+          proximoNumero-- // liberar el número si falló
+          warn('BORR-MES', `Error contrato ${contrato.id} mes ${mes}: ${err.message}`)
+        }
+      }
+    }
+    log('BORR-MES', `Fin. Creados: ${creados} | Omitidos: ${omitidos}`)
+  } catch (err) {
+    warn('BORR-MES', `Error fatal: ${err.message}`)
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 // REGISTRO DE TODOS LOS JOBS
 // ══════════════════════════════════════════════════════════════════
 export function iniciarCrons() {
@@ -418,8 +540,12 @@ export function iniciarCrons() {
   // Job 2 — Paneles libres: diario 06:10 AM Lima
   cron.schedule('10 6 * * *', liberarPanelesVencidos, { timezone: 'America/Lima' })
 
-  // Job 3 — Borradores automáticos: diario 07:00 AM Lima
-  cron.schedule('0 7 * * *', generarBorradoresFactura, { timezone: 'America/Lima' })
+  // Job 3 (reemplazado) — antes: 1 borrador al vencer el contrato (no calzaba
+  // con facturación mensual). Ahora se usa generarBorradoresMensuales (Job 8).
+  // generarBorradoresFactura queda disponible pero ya no se agenda.
+
+  // Job 8 — Borradores mensuales por mes pagado: diario 07:00 AM Lima
+  cron.schedule('0 7 * * *', generarBorradoresMensuales, { timezone: 'America/Lima' })
 
   // Job 4 — Resumen Diario de Boletas (RC): diario 23:00 Lima
   // Procesa boletas de ayer que aún no tienen RC enviado.
@@ -437,7 +563,7 @@ export function iniciarCrons() {
   console.log('⏰  Crons registrados (hora Lima):')
   console.log('   · 06:00 — Marcar facturas vencidas')
   console.log('   · 06:10 — Liberar paneles sin contrato activo')
-  console.log('   · 07:00 — Generar borradores de factura automáticos')
+  console.log('   · 07:00 — Borradores de factura por mes pagado (listos para emitir)')
   console.log('   · 09:00 — Recordatorios de cobranza al cliente')
   console.log('   · 23:00 — Resumen Diario de Boletas (RC) → SUNAT')
   console.log('   · cada 30 min — Reintentar emisiones por SUNAT caído')

@@ -77,6 +77,49 @@ const ocrLimit = rateLimit({
 })
 router.post('/ocr', ocrLimit, authApiKey, analizarImagen)
 
+// ── VER COMPROBANTE (clic del cliente = lectura confiable) ────────
+// El cliente hace clic en "Ver comprobante" del correo → registra
+// visto_cliente=true (señal mucho más confiable que el pixel) y le
+// entrega el PDF. Requiere token firmado.
+router.get('/ver/:facturaId', async (req, res) => {
+  const { facturaId } = req.params;
+  const token = req.query.t;
+
+  if (!idFirestoreValido(facturaId) || !verificarTrack(facturaId, token)) {
+    return res.status(403).send('Enlace inválido o expirado.');
+  }
+
+  try {
+    const db  = getDb();
+    const ref = db.collection('facturas').doc(facturaId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).send('Comprobante no encontrado.');
+
+    const factura = { id: doc.id, ...doc.data() };
+
+    // Marcar como visto (clic real, confiable)
+    await ref.update({
+      leido_cliente: true,
+      visto_cliente: true,
+      leido_cliente_at: new Date().toISOString(),
+    }).catch(() => {});
+
+    // Entregar el PDF
+    const { generarPdfFactura } = await import('../services/pdf.js');
+    const { pdfBuffer } = await generarPdfFactura(factura);
+    const tipo = factura.tipo_doc === '01' ? 'Factura' : 'Boleta';
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${tipo}-${factura.numero_fmt || factura.id}.pdf"`,
+      'Cache-Control': 'no-store',
+    });
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[ver] Error:', err.message);
+    return res.status(500).send('No se pudo generar el comprobante.');
+  }
+})
+
 // ── CLOUDINARY — Eliminación segura de imágenes ───────────────────
 router.post('/cloudinary/delete', authApiKey, eliminarImagen)
 

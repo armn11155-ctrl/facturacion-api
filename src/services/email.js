@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { firmarTrack } from "../lib/tracking.js";
+import { generarPdfFactura } from "./pdf.js";
 
 const GMAIL_USER  = process.env.GMAIL_USER;
 const GMAIL_PASS  = process.env.GMAIL_PASS;
@@ -34,6 +35,16 @@ function htmlFactura(factura, esAdmin = false) {
     ? `<img src="${API_URL}/api/track/${factura.id}?t=${firmarTrack(factura.id)}" width="1" height="1" style="display:block" alt="" />`
     : "";
 
+  // Botón "Ver comprobante" — clic = confirmación de lectura CONFIABLE (no como el pixel)
+  const verUrl = !esAdmin && factura.id && API_URL
+    ? `${API_URL}/api/ver/${factura.id}?t=${firmarTrack(factura.id)}`
+    : "";
+  const verBtn = verUrl
+    ? `<div style="text-align:center;margin:20px 0 4px">
+         <a href="${verUrl}" style="display:inline-block;background:#1D4ED8;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px">Ver / descargar comprobante</a>
+       </div>`
+    : "";
+
   return `
 <!DOCTYPE html>
 <html lang="es">
@@ -55,7 +66,7 @@ function htmlFactura(factura, esAdmin = false) {
       <p style="margin:0 0 20px;font-size:15px;color:#333">
         ${esAdmin
           ? `Se emitió la ${tipo.toLowerCase()} <b>${factura.numero_fmt}</b> para el cliente <b>${factura.cliente_nombre}</b>.`
-          : `Estimado/a <b>${factura.cliente_nombre}</b>, le informamos que se ha emitido el comprobante <b>${factura.numero_fmt}</b> a su nombre.`
+          : `Estimado/a <b>${factura.cliente_nombre}</b>, ¡gracias por confiar en nosotros! 🙌<br/><br/>Adjuntamos tu comprobante <b>${factura.numero_fmt}</b>. Aquí tienes el detalle:`
         }
       </p>
       <div style="background:#f8fafc;border-radius:8px;padding:16px 20px;margin-bottom:20px">
@@ -99,6 +110,7 @@ function htmlFactura(factura, esAdmin = false) {
         }
         <p style="margin:8px 0 0;font-size:18px;font-weight:700;color:#1D4ED8">Total: ${fmt(factura.total)}</p>
       </div>
+      ${verBtn}
     </div>
     <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #eee;text-align:center">
       <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Sistema de Facturación Electrónica</p>
@@ -121,6 +133,21 @@ export async function enviarCorreoFactura(factura) {
     auth: { user: GMAIL_USER, pass: GMAIL_PASS },
   });
 
+  // Generar el PDF para adjuntarlo (si falla, se envía sin adjunto)
+  let attachments = [];
+  try {
+    const { pdfBuffer } = await generarPdfFactura(factura);
+    if (pdfBuffer) {
+      attachments = [{
+        filename: `${tipo}-${factura.numero_fmt || factura.id}.pdf`,
+        content: pdfBuffer,
+        contentType: "application/pdf",
+      }];
+    }
+  } catch (err) {
+    console.warn("[email] No se pudo generar el PDF para adjuntar:", err.message);
+  }
+
   let adminOk      = false;
   let clienteOk    = false;
   let clienteError = null;
@@ -132,6 +159,7 @@ export async function enviarCorreoFactura(factura) {
       to:      ADMIN_EMAIL,
       subject: `[Admin] ${tipo} ${factura.numero_fmt} — ${factura.cliente_nombre}`,
       html:    htmlFactura(factura, true),
+      attachments,
     });
     adminOk = true;
     console.log(`[email] ✅ Admin notificado: ${factura.numero_fmt}`);
@@ -147,6 +175,7 @@ export async function enviarCorreoFactura(factura) {
         to:      factura.cliente_email,
         subject: `Tu ${tipo} ${factura.numero_fmt} — ${EMISOR}`,
         html:    htmlFactura(factura, false),
+        attachments,
       });
       clienteOk = true;
       console.log(`[email] ✅ Cliente notificado: ${factura.cliente_email}`);
