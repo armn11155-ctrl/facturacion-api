@@ -11,6 +11,9 @@ const API_URL     = (process.env.API_URL || "").replace(/\/$/, "");
 // Hoy es el subdominio gratis de Cloudflare Pages; al comprar un dominio
 // propio, basta cambiar esta variable — el código no necesita tocarse.
 const PORTAL_URL  = (process.env.PORTAL_URL || "https://facturacion-web-abi.pages.dev").replace(/\/$/, "");
+// Logo Vista 360 (wordmark blanco — diseñado para fondo oscuro), servido
+// como estático desde el mismo dominio del portal.
+const LOGO_URL    = `${PORTAL_URL}/logo-vista360.png`;
 
 const fmt = (n) =>
   "S/ " + Number(n || 0).toLocaleString("es-PE", { minimumFractionDigits: 2 });
@@ -42,8 +45,8 @@ function htmlFactura(factura, esAdmin = false) {
     ? `${PORTAL_URL}/ver/${factura.id}?t=${firmarTrack(factura.id)}`
     : "";
   const botonPortal = portalUrl
-    ? `<div style="text-align:center;margin:22px 0 4px">
-         <a href="${portalUrl}" style="display:inline-block;background:linear-gradient(135deg,#1D4ED8,#2563EB);color:#fff;text-decoration:none;padding:13px 30px;border-radius:10px;font-weight:700;font-size:14px;box-shadow:0 4px 14px rgba(29,78,216,0.3)">Ver Factura Electrónica →</a>
+    ? `<div style="text-align:center;margin:24px 0 6px">
+         <a href="${portalUrl}" style="display:block;background:#15347A;color:#fff;text-decoration:none;padding:15px 20px;border-radius:8px;font-weight:700;font-size:14.5px;letter-spacing:0.2px">Ver Factura Electrónica</a>
        </div>`
     : "";
 
@@ -73,8 +76,9 @@ function htmlFactura(factura, esAdmin = false) {
       ${botonPortal}
       <p style="margin:18px 0 14px;font-size:15px;color:#333;line-height:1.6">Quedo atento a cualquier consulta o información adicional que pueda necesitar.</p>
       <p style="margin:0 0 18px;font-size:15px;color:#333;line-height:1.6">Muchas gracias por su confianza.</p>
+      <hr style="border:none;border-top:1px solid #e5e9f0;margin:22px 0 18px" />
       <p style="margin:0;font-size:15px;color:#333;line-height:1.6">Saludos cordiales,</p>
-      <p style="margin:14px 0 0;font-size:15px;color:#111;font-weight:700">${FIRMA}</p>
+      <p style="margin:10px 0 0;font-size:15px;color:#111;font-weight:700">${FIRMA}</p>
       <p style="margin:1px 0 0;font-size:13px;color:#777">${CARGO} · ${MARCA}</p>
       <p style="margin:8px 0 0;font-size:13px;color:#555">&#128222; ${TEL} &nbsp;&middot;&nbsp; &#9993;&#65039; ${MAIL}</p>`;
   }
@@ -85,14 +89,15 @@ function htmlFactura(factura, esAdmin = false) {
 <head><meta charset="UTF-8"><title>${tipo} ${factura.numero_fmt}</title></head>
 <body style="margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',Arial,sans-serif">
   <div style="max-width:560px;margin:32px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.07)">
-    <div style="background:linear-gradient(135deg,#1D4ED8 0%,#2563EB 100%);padding:24px 30px">
-      <p style="margin:0;color:rgba(255,255,255,.85);font-size:11px;text-transform:uppercase;letter-spacing:2px">${MARCA}</p>
-      <p style="margin:4px 0 0;color:#fff;font-size:19px;font-weight:700">${esAdmin ? `${tipo} emitida` : `${tipo} ${factura.numero_fmt}`}</p>
+    <div style="background:linear-gradient(135deg,#0F172A 0%,#1D4ED8 100%);padding:34px 30px;text-align:center">
+      <img src="${LOGO_URL}" alt="${MARCA}" width="170" style="display:inline-block" />
     </div>
-    <div style="padding:28px 30px">
+    <div style="padding:30px 30px 26px">
+      ${!esAdmin ? `<p style="margin:0 0 18px;font-size:11px;color:#9AA5B8;text-transform:uppercase;letter-spacing:1.5px;font-weight:700">${tipo} Electrónica · ${factura.numero_fmt}</p>` : ""}
       ${cuerpo}
     </div>
-    <div style="background:#f8fafc;padding:14px 30px;border-top:1px solid #eee;text-align:center">
+    <div style="background:#f8fafc;padding:16px 30px;border-top:1px solid #eee;text-align:center">
+      ${!esAdmin ? `<p style="margin:0 0 6px;font-size:11px;color:#b8bfca">Verificamos la apertura de esta factura para confirmar que llegó correctamente.</p>` : ""}
       <p style="margin:0;font-size:11px;color:#aaa">${MARCA} · Publicidad Exterior${factura.emisor_ruc ? ` · ${EMISOR} RUC ${factura.emisor_ruc}` : ""}</p>
     </div>
   </div>
