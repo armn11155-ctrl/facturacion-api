@@ -22,6 +22,9 @@ function htmlFactura(factura, esAdmin = false) {
   const tipo  = factura.tipo_doc === "01" ? "Factura" : "Boleta";
   const FIRMA = process.env.FIRMA_NOMBRE || "Alan Martínez";
   const CARGO = process.env.FIRMA_CARGO  || "Gerente General";
+  const MARCA = process.env.MARCA_COMERCIAL || "Vista 360";
+  const TEL   = process.env.FIRMA_TELEFONO  || "947-957-971";
+  const MAIL  = process.env.FIRMA_EMAIL     || "armn.101@hotmail.com";
 
   // Píxel de apertura — solo correo al cliente, con token firmado
   const trackingPixel = !esAdmin && factura.id && API_URL
@@ -48,24 +51,15 @@ function htmlFactura(factura, esAdmin = false) {
   } else {
     // Correo elegante y breve para el cliente, firmado por el gerente
     cuerpo = `
-      <p style="margin:0 0 16px;font-size:15px;color:#333;line-height:1.6">
-        ${saludoSegunHora()}, <b>${factura.cliente_nombre}</b>:
-      </p>
-      <p style="margin:0 0 16px;font-size:15px;color:#333;line-height:1.6">
-        Le hago llegar el comprobante correspondiente al servicio de panel publicitario.
-        Lo encontrará <b>adjunto en formato PDF</b> en este mismo correo.
-      </p>
-      <div style="background:#f8fafc;border:1px solid #eef1f6;border-radius:10px;padding:14px 18px;margin:0 0 18px">
-        <table style="width:100%;border-collapse:collapse;font-size:13px;color:#555">
-          <tr><td style="padding:3px 0">Comprobante</td><td style="padding:3px 0;text-align:right;font-weight:700;color:#111">${factura.numero_fmt}</td></tr>
-          <tr><td style="padding:3px 0">Fecha</td><td style="padding:3px 0;text-align:right">${factura.fecha_emision || "-"}</td></tr>
-          <tr><td style="padding:3px 0">Total</td><td style="padding:3px 0;text-align:right;font-weight:700;color:#1D4ED8;font-size:16px">${fmt(factura.total)}</td></tr>
-        </table>
-      </div>
-      <p style="margin:0 0 4px;font-size:15px;color:#333;line-height:1.6">Quedo atento a cualquier consulta.</p>
-      <p style="margin:22px 0 0;font-size:14px;color:#333;line-height:1.5">Saludos cordiales,</p>
-      <p style="margin:6px 0 0;font-size:15px;color:#111;font-weight:700">${FIRMA}</p>
-      <p style="margin:1px 0 0;font-size:13px;color:#777">${CARGO} · ${EMISOR}</p>`;
+      <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">${saludoSegunHora()}, <b>${factura.cliente_nombre}</b>:</p>
+      <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Espero que se encuentre muy bien.</p>
+      <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Le comparto la factura correspondiente al servicio de panel publicitario realizado por <b>${MARCA}</b>. La encontrará <b>adjunta en formato PDF</b> en este mismo correo.</p>
+      <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Quedo atento a cualquier consulta o información adicional que pueda necesitar.</p>
+      <p style="margin:0 0 18px;font-size:15px;color:#333;line-height:1.6">Muchas gracias por su confianza.</p>
+      <p style="margin:0;font-size:15px;color:#333;line-height:1.6">Saludos cordiales,</p>
+      <p style="margin:14px 0 0;font-size:15px;color:#111;font-weight:700">${FIRMA}</p>
+      <p style="margin:1px 0 0;font-size:13px;color:#777">${CARGO} · ${MARCA}</p>
+      <p style="margin:8px 0 0;font-size:13px;color:#555">&#128222; ${TEL} &nbsp;&middot;&nbsp; &#9993;&#65039; ${MAIL}</p>`;
   }
 
   return `
@@ -75,14 +69,14 @@ function htmlFactura(factura, esAdmin = false) {
 <body style="margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',Arial,sans-serif">
   <div style="max-width:560px;margin:32px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.07)">
     <div style="background:linear-gradient(135deg,#1D4ED8 0%,#2563EB 100%);padding:24px 30px">
-      <p style="margin:0;color:rgba(255,255,255,.85);font-size:11px;text-transform:uppercase;letter-spacing:2px">${EMISOR}</p>
+      <p style="margin:0;color:rgba(255,255,255,.85);font-size:11px;text-transform:uppercase;letter-spacing:2px">${MARCA}</p>
       <p style="margin:4px 0 0;color:#fff;font-size:19px;font-weight:700">${esAdmin ? `${tipo} emitida` : `${tipo} ${factura.numero_fmt}`}</p>
     </div>
     <div style="padding:28px 30px">
       ${cuerpo}
     </div>
     <div style="background:#f8fafc;padding:14px 30px;border-top:1px solid #eee;text-align:center">
-      <p style="margin:0;font-size:11px;color:#aaa">${EMISOR} · RUC ${factura.emisor_ruc || ""} · Publicidad Exterior</p>
+      <p style="margin:0;font-size:11px;color:#aaa">${MARCA} · Publicidad Exterior${factura.emisor_ruc ? ` · ${EMISOR} RUC ${factura.emisor_ruc}` : ""}</p>
     </div>
   </div>
   ${trackingPixel}
@@ -142,7 +136,7 @@ export async function enviarCorreoFactura(factura) {
       await transporter.sendMail({
         from:    `"${EMISOR}" <${GMAIL_USER}>`,
         to:      factura.cliente_email,
-        subject: `${tipo} ${factura.numero_fmt} · Servicio de panel publicitario — ${EMISOR}`,
+        subject: "Envío de factura por servicio de panel publicitario",
         html:    htmlFactura(factura, false),
         attachments,
       });

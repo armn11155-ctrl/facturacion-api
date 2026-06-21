@@ -53,8 +53,16 @@ export const authJWT = async (req, res, next) => {
     const email = String(decoded.email ?? "").toLowerCase();
 
     const cache = await cargarListaBlanca();
-    if (!email || !cache.emails.includes(email)) {
+    const allowlistActiva = cache.emails.length > 0;
+
+    // A prueba de bloqueos: si la lista blanca está vacía/ausente, se permite
+    // el acceso (comportamiento previo) y se avisa. La restricción se activa
+    // automáticamente en cuanto config/allowedEmails tenga correos.
+    if (allowlistActiva && (!email || !cache.emails.includes(email))) {
       return res.status(403).json({ ok: false, error: "Usuario no autorizado" });
+    }
+    if (!allowlistActiva) {
+      console.warn("[auth] config/allowedEmails vacío o ausente — acceso permitido. Configura la lista para activar la restricción.");
     }
 
     req.user = { uid: decoded.uid, email, rol: esAdmin(email, cache) ? "admin" : "vendedor" };
