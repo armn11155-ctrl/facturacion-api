@@ -85,7 +85,7 @@ const propuestaLimit = rateLimit({
 })
 router.post('/propuestas/enviar', propuestaLimit, authApiKey, async (req, res) => {
   const { enviarPropuesta } = await import('../services/email.js')
-  const { email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara, precioMensual, meses, notas } = req.body || {}
+  const { email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara, precioMensual, meses, costoInstalacion, notas } = req.body || {}
 
   if (!email || !panelNombre || !precioMensual) {
     return res.status(400).json({ ok: false, error: 'Faltan datos: email, panelNombre y precioMensual son obligatorios' })
@@ -96,7 +96,7 @@ router.post('/propuestas/enviar', propuestaLimit, authApiKey, async (req, res) =
 
   const r = await enviarPropuesta({
     email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara,
-    precioMensual, meses: meses || 1, notas,
+    precioMensual, meses: meses || 1, costoInstalacion: costoInstalacion || 0, notas,
   })
   if (!r.ok) return res.status(502).json({ ok: false, error: r.error })
   res.json({ ok: true, mensaje: 'Propuesta enviada' })
