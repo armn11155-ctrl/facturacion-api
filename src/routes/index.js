@@ -85,7 +85,7 @@ const propuestaLimit = rateLimit({
 })
 router.post('/propuestas/enviar', propuestaLimit, authApiKey, async (req, res) => {
   const { enviarPropuesta } = await import('../services/email.js')
-  const { email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara, precioMensual, meses, costoInstalacion, notas } = req.body || {}
+  const { clienteId, email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara, precioMensual, meses, costoInstalacion, notas } = req.body || {}
 
   if (!email || !panelNombre || !precioMensual) {
     return res.status(400).json({ ok: false, error: 'Faltan datos: email, panelNombre y precioMensual son obligatorios' })
@@ -99,6 +99,17 @@ router.post('/propuestas/enviar', propuestaLimit, authApiKey, async (req, res) =
     precioMensual, meses: meses || 1, costoInstalacion: costoInstalacion || 0, notas,
   })
   if (!r.ok) return res.status(502).json({ ok: false, error: r.error })
+
+  // Registrar cuándo se envió, para poder avisar si el cliente no responde
+  if (clienteId) {
+    const total = (Number(precioMensual) * (Number(meses) || 1)) + (Number(costoInstalacion) || 0)
+    getDb().collection('clientes').doc(clienteId).update({
+      ultima_cotizacion_at: new Date().toISOString(),
+      ultima_cotizacion_monto: total,
+      ultima_cotizacion_panel: panelNombre,
+    }).catch(err => console.warn('[propuestas] No se pudo registrar seguimiento:', err.message))
+  }
+
   res.json({ ok: true, mensaje: 'Propuesta enviada' })
 })
 

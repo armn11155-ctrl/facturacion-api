@@ -567,6 +567,81 @@ export async function responderLeadsNuevos() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// JOB 11 — Generar gastos recurrentes del mes
+// ══════════════════════════════════════════════════════════════════
+// Por cada gasto marcado recurrente=true (plantilla), crea su copia
+// del mes actual si todavía no existe (dedup por recurrente_origen_id
+// + mismo mes). No borra ni modifica la plantilla original.
+// ══════════════════════════════════════════════════════════════════
+export async function generarGastosRecurrentes() {
+  log('GASTOS-REC', 'Buscando plantillas de gastos recurrentes...')
+  try {
+    const db = getDb()
+    const mesActual = hoyStr().slice(0, 7) // "YYYY-MM"
+
+    const plantillasSnap = await db.collection('gastos')
+      .where('deleted', '==', false)
+      .where('recurrente', '==', true)
+      .get()
+
+    if (plantillasSnap.empty) { log('GASTOS-REC', 'Sin plantillas recurrentes.'); return }
+
+    let creados = 0, omitidos = 0
+    for (const doc of plantillasSnap.docs) {
+      const plantilla = { id: doc.id, ...doc.data() }
+
+      // ¿La propia plantilla ya es del mes actual? (se creó este mes, no duplicar)
+      if ((plantilla.fecha || '').slice(0, 7) === mesActual) { omitidos++; continue }
+
+      // ¿Ya existe una copia generada para este mes?
+      const existe = await db.collection('gastos')
+        .where('recurrente_origen_id', '==', plantilla.id)
+        .where('deleted', '==', false)
+        .get()
+      const yaExisteEsteMes = existe.docs.some(d => (d.data().fecha || '').slice(0, 7) === mesActual)
+      if (yaExisteEsteMes) { omitidos++; continue }
+
+      const dia = plantilla.recurrente_dia || 1
+      const ultimoDiaMes = new Date(Number(mesActual.slice(0, 4)), Number(mesActual.slice(5, 7)), 0).getDate()
+      const diaSeguro = Math.min(dia, ultimoDiaMes)
+      const fecha = `${mesActual}-${String(diaSeguro).padStart(2, '0')}`
+
+      const nuevoGasto = {
+        descripcion: plantilla.descripcion,
+        categoria: plantilla.categoria || 'Otro',
+        monto: plantilla.monto || 0,
+        mes: mesActual,
+        fecha,
+        proveedor: plantilla.proveedor || '',
+        ruc: plantilla.ruc || '',
+        concepto: plantilla.concepto || '',
+        igv: plantilla.igv || 0,
+        subtotal: plantilla.subtotal || 0,
+        notas: 'Generado automáticamente (gasto recurrente)',
+        moneda: plantilla.moneda || 'PEN',
+        recurrente: false,
+        recurrente_origen_id: plantilla.id,
+        deleted: false,
+        createdAt: FieldValue.serverTimestamp(),
+      }
+
+      try {
+        await db.collection('gastos').add(nuevoGasto)
+        creados++
+        log('GASTOS-REC', `✅ ${plantilla.descripcion} — ${fmtMoneyLog(plantilla.monto)} (${fecha})`)
+      } catch (err) {
+        warn('GASTOS-REC', `Error con plantilla ${plantilla.id}: ${err.message}`)
+      }
+    }
+    log('GASTOS-REC', `Fin. Creados: ${creados} | Omitidos: ${omitidos}`)
+  } catch (err) {
+    warn('GASTOS-REC', `Error fatal: ${err.message}`)
+  }
+}
+
+function fmtMoneyLog(n) { return `S/ ${Number(n || 0).toFixed(2)}` }
+
+// ══════════════════════════════════════════════════════════════════
 // REGISTRO DE TODOS LOS JOBS
 // ══════════════════════════════════════════════════════════════════
 export function iniciarCrons() {
@@ -602,6 +677,9 @@ export function iniciarCrons() {
   // Job 10 — Responder leads nuevos del formulario web: cada 10 min
   cron.schedule('*/10 * * * *', responderLeadsNuevos, { timezone: 'America/Lima' })
 
+  // Job 11 — Generar gastos recurrentes del mes: día 1, 06:30 Lima
+  cron.schedule('30 6 1 * *', generarGastosRecurrentes, { timezone: 'America/Lima' })
+
   console.log('⏰  Crons registrados (hora Lima):')
   console.log('   · 06:00 — Marcar facturas vencidas')
   console.log('   · 06:10 — Liberar paneles sin contrato activo')
@@ -612,4 +690,5 @@ export function iniciarCrons() {
   console.log('   · cada 30 min — Reintentar emisiones por SUNAT caído')
   console.log('   · cada hora — Alertar comprobantes rechazados')
   console.log('   · cada 10 min — Responder leads nuevos del formulario web')
+  console.log('   · día 1 de cada mes — Generar gastos recurrentes')
 }

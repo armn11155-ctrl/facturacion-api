@@ -43,24 +43,54 @@ export async function enviarDigestDiario() {
   const porCobrar = facturas.filter((f) => ["Emitida", "Aceptada", "Vencida"].includes(f.estado));
   const totalPorCobrar = porCobrar.reduce((s, f) => s + Number(f.total || 0), 0);
 
-  // 3) Contratos por vencer (≤30 días)
+  // 3) Contratos por vencer (≤30 días) — recordatorio administrativo
   const porVencer = contratos
     .filter((c) => c.fin && c.fin >= hoy && c.fin <= en30)
     .sort((a, b) => a.fin.localeCompare(b.fin));
 
-  // 4) Paneles libres (sin contrato activo hoy)
+  // 4) Paneles libres ahora + por liberarse pronto (preventa, ≤15 días,
+  // y que NO ya tengan un contrato siguiente armado para el mismo panel)
   const ocupados = new Set(contratos.filter((c) => c.fin && c.fin >= hoy).map((c) => c.panel_id));
-  const libres = paneles.filter((p) => !ocupados.has(p.id));
+  const libresAhora = paneles.filter((p) => !ocupados.has(p.id));
+
+  const en15 = ymd(new Date(Date.now() + 15 * 86400000));
+  const porLiberarse = contratos.filter((c) => {
+    if (!c.fin || c.fin < hoy || c.fin > en15) return false;
+    const yaRenovado = contratos.some((o) => o.id !== c.id && o.panel_id === c.panel_id && o.inicio > c.fin);
+    return !yaRenovado;
+  });
 
   // 5) Clientes inactivos (sin contrato reciente)
   const conActividad = new Set(contratos.filter((c) => c.fin && c.fin >= hace90).map((c) => c.cliente_id));
-  const inactivos = clientes.filter((cl) => !conActividad.has(cl.id));
+  const inactivos = clientes.filter((cl) => !conActividad.has(cl.id) && cl.tipo !== "Prospecto");
+
+  // 6) Contratos vigentes sin foto de campaña reciente (+30 días o ninguna)
+  const hace30 = new Date(Date.now() - 30 * 86400000);
+  const contratosVigentes = contratos.filter((c) => c.inicio && c.fin && c.inicio <= hoy && c.fin >= hoy);
+  const sinFotoReciente = contratosVigentes.filter((c) => {
+    const fotos = c.fotos_campania || [];
+    if (fotos.length === 0) return true;
+    const ultima = fotos.reduce((a, f) => (f.fecha > a ? f.fecha : a), fotos[0].fecha);
+    return new Date(ultima) <= hace30;
+  });
+  const ganadosSinContrato = clientes.filter((cl) => cl.tipo === "Prospecto" && cl.estado === "Ganado");
+
+  // 7) Cotizaciones enviadas hace 3+ días sin que el lead avance de etapa
+  const hace3dias = new Date(Date.now() - 3 * 86400000);
+  const cotizacionesSinRespuesta = clientes.filter((cl) =>
+    cl.tipo === "Prospecto" &&
+    cl.estado === "Propuesta enviada" &&
+    cl.ultima_cotizacion_at &&
+    new Date(cl.ultima_cotizacion_at) <= hace3dias,
+  );
 
   const nombreCli = (id) => clientes.find((c) => c.id === id)?.empresa || "Cliente";
   const nombrePan = (id) => paneles.find((p) => p.id === id)?.nombre || "Panel";
   const diasA = (f) => Math.round((new Date(f + "T00:00:00") - new Date(hoy + "T00:00:00")) / 86400000);
 
-  const hayPendientes = borradores.length || porCobrar.length || porVencer.length || libres.length || inactivos.length;
+  const hayPendientes = borradores.length || porCobrar.length || porVencer.length || libresAhora.length ||
+    porLiberarse.length || inactivos.length || ganadosSinContrato.length || cotizacionesSinRespuesta.length ||
+    sinFotoReciente.length;
 
   // ── Construcción del HTML ──────────────────────────────────────────
   const tarjeta = (color, icono, titulo, valor, detalle = "") => `
@@ -78,11 +108,34 @@ export async function enviarDigestDiario() {
     return `• ${nombreCli(c.cliente_id)} — ${nombrePan(c.panel_id)} · vence en <b>${d} día${d === 1 ? "" : "s"}</b> · ${fmt(c.monto)}/mes`;
   }).join("<br/>");
 
+  const listaPaneles = [
+    ...libresAhora.map((p) => `• <b>${p.nombre}</b> — libre ahora`),
+    ...porLiberarse.map((c) => {
+      const d = diasA(c.fin);
+      return `• <b>${nombrePan(c.panel_id)}</b> — se libera en ${d} día${d === 1 ? "" : "s"}, vende antes 🔥`;
+    }),
+  ].slice(0, 8).join("<br/>");
+  const totalPaneles = libresAhora.length + porLiberarse.length;
+
+  const listaGanados = ganadosSinContrato.slice(0, 6).map((c) =>
+    `• <b>${c.empresa}</b>${c.contacto ? ` — ${c.contacto}` : ""}`).join("<br/>");
+
+  const listaCotizaciones = cotizacionesSinRespuesta.slice(0, 6).map((c) => {
+    const d = Math.round((Date.now() - new Date(c.ultima_cotizacion_at)) / 86400000);
+    return `• <b>${c.empresa}</b> — ${fmt(c.ultima_cotizacion_monto)} · enviada hace ${d} días`;
+  }).join("<br/>");
+
+  const listaSinFoto = sinFotoReciente.slice(0, 6).map((c) =>
+    `• ${nombreCli(c.cliente_id)} — <b>${nombrePan(c.panel_id)}</b>`).join("<br/>");
+
   const secciones = [
     borradores.length ? tarjeta("#1D4ED8", "🧾", "Borradores listos para emitir", borradores.length, listaBorradores + (borradores.length > 6 ? `<br/>… y ${borradores.length - 6} más` : "")) : "",
     porCobrar.length ? tarjeta("#059669", "💰", "Por cobrar", `${porCobrar.length} · ${fmt(totalPorCobrar)}`, "Facturas emitidas pendientes de pago.") : "",
+    ganadosSinContrato.length ? tarjeta("#16A34A", "🎉", "Ganados sin contrato creado", ganadosSinContrato.length, listaGanados) : "",
+    cotizacionesSinRespuesta.length ? tarjeta("#DC2626", "⏳", "Cotizaciones sin respuesta (3+ días)", cotizacionesSinRespuesta.length, listaCotizaciones) : "",
     porVencer.length ? tarjeta("#D97706", "⏰", "Contratos por vencer (30 días)", porVencer.length, listaVencer + (porVencer.length > 6 ? `<br/>… y ${porVencer.length - 6} más` : "")) : "",
-    libres.length ? tarjeta("#7C3AED", "📍", "Paneles libres para vender", libres.length, libres.slice(0, 8).map((p) => p.nombre).join(" · ")) : "",
+    totalPaneles ? tarjeta("#7C3AED", "📍", "Paneles libres / por liberarse", totalPaneles, listaPaneles + (totalPaneles > 8 ? `<br/>… y ${totalPaneles - 8} más` : "")) : "",
+    sinFotoReciente.length ? tarjeta("#0891B2", "📷", "Paneles sin foto reciente (+30 días)", sinFotoReciente.length, listaSinFoto + (sinFotoReciente.length > 6 ? `<br/>… y ${sinFotoReciente.length - 6} más` : "")) : "",
     inactivos.length ? tarjeta("#6B7280", "😴", "Clientes inactivos (90 días)", inactivos.length, "Sin contratos recientes — oportunidad de reactivar.") : "",
   ].filter(Boolean).join("");
 
