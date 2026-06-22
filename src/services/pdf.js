@@ -9,6 +9,7 @@ import QRCode    from 'qrcode'
 import { buildHtmlFactura } from '../templates/factura.html.js'
 import { buildHtmlTicket }  from '../templates/ticket.html.js'
 import { buildHtmlCotizacion } from '../templates/cotizacion.html.js'
+import { buildHtmlPropuesta } from '../templates/propuesta.html.js'
 
 // ── Cadena QR exigida por SUNAT ───────────────────────────────────
 function buildCadenaQR(factura) {
@@ -80,6 +81,26 @@ export async function generarPdfFactura(factura) {
 // ── PDF de respuesta automática a leads (informativo, sin precios) ─
 export async function generarPdfCotizacion(solicitud) {
   const html    = buildHtmlCotizacion(solicitud)
+  const browser = await launchBrowser()
+  const page    = await browser.newPage()
+
+  try {
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30_000 })
+    const pdfBuffer = await page.pdf({
+      format:          'A4',
+      printBackground: true,
+      margin:          { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' },
+    })
+    return { pdfBuffer }
+  } finally {
+    await page.close()
+    await browser.close()
+  }
+}
+
+// ── PDF de propuesta comercial con precio real (enviada por Alan) ──
+export async function generarPdfPropuesta(datos) {
+  const html    = buildHtmlPropuesta(datos)
   const browser = await launchBrowser()
   const page    = await browser.newPage()
 

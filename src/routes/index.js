@@ -77,6 +77,31 @@ const ocrLimit = rateLimit({
 })
 router.post('/ocr', ocrLimit, authApiKey, analizarImagen)
 
+// ── PROPUESTA COMERCIAL — Vista360 (CRM) → cliente, con precio real ──
+const propuestaLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { ok: false, error: 'Límite de propuestas alcanzado. Espera 15 minutos.' },
+})
+router.post('/propuestas/enviar', propuestaLimit, authApiKey, async (req, res) => {
+  const { enviarPropuesta } = await import('../services/email.js')
+  const { email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara, precioMensual, meses, notas } = req.body || {}
+
+  if (!email || !panelNombre || !precioMensual) {
+    return res.status(400).json({ ok: false, error: 'Faltan datos: email, panelNombre y precioMensual son obligatorios' })
+  }
+  if (Number(precioMensual) <= 0) {
+    return res.status(400).json({ ok: false, error: 'El precio mensual debe ser mayor a 0' })
+  }
+
+  const r = await enviarPropuesta({
+    email, contacto, empresa, panelNombre, panelCiudad, panelTipo, cara,
+    precioMensual, meses: meses || 1, notas,
+  })
+  if (!r.ok) return res.status(502).json({ ok: false, error: r.error })
+  res.json({ ok: true, mensaje: 'Propuesta enviada' })
+})
+
 // ── PORTAL DE FACTURAS — datos del comprobante (público, token firmado) ──
 // Usado por el portal branded del cliente (facturacion-web /ver/:id).
 // Cargar esta página = lectura real y confiable (a diferencia del pixel):

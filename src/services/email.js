@@ -316,3 +316,50 @@ export async function enviarRespuestaLead(solicitud) {
     return { ok: false, error: err.message };
   }
 }
+
+// ════════════════════════════════════════════════════════════════════
+// PROPUESTA COMERCIAL CON PRECIO REAL — enviada manualmente desde el CRM
+// ════════════════════════════════════════════════════════════════════
+export async function enviarPropuesta(datos) {
+  if (!GMAIL_USER || !GMAIL_PASS) return { ok: false, error: "Gmail no configurado" };
+  if (!datos.email) return { ok: false, error: "Falta el correo del prospecto" };
+
+  let attachments = [];
+  try {
+    const { generarPdfPropuesta } = await import("./pdf.js");
+    const { pdfBuffer } = await generarPdfPropuesta(datos);
+    if (pdfBuffer) {
+      attachments = [{ filename: "Vista360-Propuesta.pdf", content: pdfBuffer, contentType: "application/pdf" }];
+    }
+  } catch (err) {
+    console.warn("[email] No se pudo generar el PDF de propuesta:", err.message);
+    return { ok: false, error: "No se pudo generar el PDF: " + err.message };
+  }
+
+  try {
+    await transport().sendMail({
+      from: `"Vista 360" <${GMAIL_USER}>`,
+      to: datos.email,
+      cc: ADMIN_EMAIL,
+      subject: `Propuesta — ${datos.panelNombre || "Panel publicitario"} · Vista 360`,
+      html: `
+        <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.07)">
+          <div style="background:linear-gradient(135deg,#0F172A 0%,#1D4ED8 100%);padding:28px 30px">
+            <div style="color:#fff;font-size:22px;font-weight:900">VISTA<span style="color:#93C5FD">360</span></div>
+            <div style="color:rgba(255,255,255,.7);font-size:11px;text-transform:uppercase;letter-spacing:2px;margin-top:3px">Publicidad Exterior</div>
+          </div>
+          <div style="padding:26px 28px">
+            <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Hola ${datos.contacto || ""},</p>
+            <p style="margin:0 0 14px;font-size:15px;color:#333;line-height:1.6">Te comparto adjunta la propuesta que conversamos para <b>${datos.panelNombre || "el panel"}</b>.</p>
+            <p style="margin:0;font-size:13px;color:#777">Cualquier consulta, quedo atento.</p>
+          </div>
+        </div>`,
+      attachments,
+    });
+    console.log(`[email] ✅ Propuesta enviada: ${datos.email}`);
+    return { ok: true };
+  } catch (err) {
+    console.error("[email] ❌ Error enviando propuesta:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
