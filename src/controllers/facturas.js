@@ -75,6 +75,7 @@ export const crear = async (req, res) => {
       panel_id, panel_nombre, periodo_inicio, periodo_fin, concepto,
       cliente_id,
       cara_panel,
+      imagen_diseno_url,
       moneda = "PEN", es_exonerado = false,
       fecha_emision, fecha_vencimiento,
       items = [],
@@ -124,6 +125,9 @@ export const crear = async (req, res) => {
       panel_nombre: panel_nombre || null,
       cliente_id: cliente_id || null,
       cara_panel: cara_panel || null,
+      // Imagen del diseño a imprimir — solo aplica a paneles que no son LED
+      // (los LED muestran contenido digital, no necesitan arte impreso).
+      imagen_diseno_url: imagen_diseno_url || null,
       periodo_inicio: periodo_inicio || null,
       periodo_fin: periodo_fin || null,
       concepto: concepto || null,
